@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { PageContainer } from '../components/Layout/PageContainer';
 import { CustomCallForm } from '../components/Call/CustomCallForm';
 import { ScenarioList } from '../components/Scenarios/ScenarioList';
@@ -6,6 +6,10 @@ import { useScenarios } from '../context/ScenarioContext';
 
 export const Scenarios: React.FC = () => {
   const { refreshScenarios } = useScenarios();
+
+  useEffect(() => {
+    refreshScenarios();
+  }, [refreshScenarios]);
 
   return (
     <PageContainer>

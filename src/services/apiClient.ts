@@ -30,13 +30,14 @@ apiClient.interceptors.request.use(
 // Add a response interceptor to handle errors
 apiClient.interceptors.response.use(
   (response) => response,
-  async (error) => {
+  async (error: AxiosError) => {
     console.error('API Error:', {
       url: error.config?.url,
       method: error.config?.method,
       status: error.response?.status,
       data: error.response?.data,
       headers: error.config?.headers,
+      serverError: error.response?.data?.detail || error.response?.data
     });
 
     if (!error.response) {
@@ -45,7 +46,7 @@ apiClient.interceptors.response.use(
 
     // Handle 401 Unauthorized
     if (error.response.status === 401) {
-      if (!error.config._retry && !error.config.url?.includes('/token')) {
+      if (!error.config?._retry && !error.config?.url?.includes('/token')) {
         error.config._retry = true;
         localStorage.removeItem('token');
         window.location.href = '/login';
@@ -53,7 +54,24 @@ apiClient.interceptors.response.use(
       }
     }
 
-    const errorMessage = error.response?.data?.detail || error.message || 'An error occurred';
+    // Handle 500 Internal Server Error
+    if (error.response.status === 500) {
+      const errorDetail = error.response.data?.detail || error.response.data;
+      console.error('Server Error Details:', errorDetail);
+      throw new Error(`Server error: ${errorDetail || 'An unexpected error occurred'}`);
+    }
+
+    // Handle CORS errors
+    if (error.message.includes('Network Error') || error.message.includes('CORS')) {
+      console.error('CORS/Network Error Details:', {
+        message: error.message,
+        response: error.response,
+        request: error.request
+      });
+      throw new Error('Unable to connect to the server. Please try again later.');
+    }
+
+    const errorMessage = error.response?.data?.detail || error.response?.data || error.message || 'An error occurred';
     throw new Error(errorMessage);
   }
 );
@@ -82,17 +100,104 @@ interface TokenResponse {
 }
 
 export interface TranscriptRecord {
-  id: string;
+  id: number;
   transcript_sid: string;
   status: string;
   full_text: string;
   date_created: string;
+  date_updated: string;
   duration: number;
-  sentences?: Array<{
+  language_code: string;
+  created_at: string;
+}
+
+// New enhanced transcript interfaces
+export interface EnhancedTranscriptRecord {
+  transcript_sid: string;
+  call_date: string;
+  duration: number;
+  call_direction: string;
+  scenario_name: string;
+  participant_info: {
+    [channel: string]: {
+      channel: number;
+      role: string;
+      name: string;
+      total_speaking_time: number;
+      word_count: number;
+      sentence_count: number;
+    };
+  };
+  conversation_flow: Array<{
+    sequence: number;
+    speaker: {
+      channel: number;
+      role: string;
+      name: string;
+    };
     text: string;
-    speaker: string;
-    timestamp: string;
+    start_time: number;
+    end_time: number;
+    duration: number;
+    confidence: number;
+    word_count: number;
   }>;
+  summary_data: {
+    total_duration_seconds: number;
+    total_sentences: number;
+    total_words: number;
+    participant_count: number;
+    average_confidence: number;
+    conversation_stats: {
+      turns: number;
+      avg_words_per_turn: number;
+      speaking_time_distribution: {
+        [channel: string]: {
+          percentage: number;
+          seconds: number;
+        };
+      };
+    };
+  };
+  media_url?: string;
+  source_type: string;
+  status: string;
+  full_text: string;
+  date_created: string;
+  date_updated: string;
+  language_code: string;
+  created_at: string;
+}
+
+export interface EnhancedTranscriptListItem {
+  transcript_sid: string;
+  call_date: string;
+  duration: number;
+  call_direction: string;
+  scenario_name: string;
+  status: string;
+  participant_count: number;
+  total_words: number;
+  average_confidence: number;
+}
+
+// Twilio transcript interfaces (for the working endpoint)
+export interface TwilioTranscriptSentence {
+  text: string;
+  speaker: number;
+  start_time: number;
+  end_time: number;
+  confidence: number;
+}
+
+export interface TwilioTranscriptResponse {
+  sid: string;
+  status: string;
+  date_created: string;
+  date_updated: string;
+  duration: number;
+  language_code: string;
+  sentences: TwilioTranscriptSentence[];
 }
 
 export const api = {
@@ -161,6 +266,7 @@ export const api = {
       const response = await apiClient.post('/schedule-call', data);
       return response.data;
     },
+    // Legacy transcript methods (keeping for backward compatibility)
     getTranscripts: async (skip = 0, limit = 10) => {
       const response = await apiClient.get<TranscriptRecord[]>('/stored-transcripts/', {
         params: { skip, limit }
@@ -168,8 +274,65 @@ export const api = {
       return response.data;
     },
     getTranscriptById: async (transcriptSid: string) => {
-      const response = await apiClient.get<TranscriptRecord>(`/stored-transcripts/${transcriptSid}`);
+      try {
+        const response = await apiClient.get<TranscriptRecord>(`/stored-transcripts/${transcriptSid}`);
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          throw new Error(`Failed to fetch transcript: ${error.response.data?.detail || 'Server error'}`);
+        }
+        throw error;
+      }
+    },
+    // New enhanced transcript methods
+    getEnhancedTranscripts: async (
+      skip = 0, 
+      limit = 10, 
+      filters?: {
+        call_direction?: string;
+        scenario_name?: string;
+        date_from?: string;
+        date_to?: string;
+      }
+    ) => {
+      const params: any = { skip, limit };
+      if (filters) {
+        Object.assign(params, filters);
+      }
+      
+      const response = await apiClient.get<EnhancedTranscriptListItem[]>('/api/enhanced-transcripts/', {
+        params
+      });
       return response.data;
+    },
+    getEnhancedTranscriptById: async (transcriptSid: string) => {
+      try {
+        const response = await apiClient.get<EnhancedTranscriptRecord>(`/api/enhanced-transcripts/${transcriptSid}`);
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          throw new Error(`Failed to fetch enhanced transcript: ${error.response.data?.detail || 'Server error'}`);
+        }
+        throw error;
+      }
+    },
+    // Working Twilio transcript methods
+    getTwilioTranscripts: async (skip = 0, limit = 10) => {
+      const response = await apiClient.get('/twilio-transcripts', {
+        params: { page_size: limit, page_token: skip > 0 ? skip.toString() : undefined }
+      });
+      return response.data;
+    },
+    getTwilioTranscriptById: async (transcriptSid: string) => {
+      try {
+        const response = await apiClient.get<TwilioTranscriptResponse>(`/twilio-transcripts/${transcriptSid}`);
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          throw new Error(`Failed to fetch Twilio transcript: ${error.response.data?.detail || 'Server error'}`);
+        }
+        throw error;
+      }
     }
   },
   scenarios: {
@@ -225,4 +388,4 @@ export const api = {
   }
 };
 
-export default api; 
+export default api;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import api from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 
@@ -39,16 +39,14 @@ export const ScenarioProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch scenarios';
       setError(new Error(message));
-      toast.error(message);
+      // Only show toast error if it's not a 401 error
+      if (!(error instanceof Error && error.message.includes('401'))) {
+        toast.error(message);
+      }
     } finally {
       setIsLoading(false);
     }
   }, []);
-
-  // Fetch scenarios on mount
-  useEffect(() => {
-    refreshScenarios();
-  }, [refreshScenarios]);
 
   return (
     <ScenarioContext.Provider 
