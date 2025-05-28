@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { DarkModeToggle } from '../common/DarkModeToggle';
+import { DarkModeToggle } from '../Common/DarkModeToggle';
 
 interface HeaderProps {
   isAuthenticated: boolean;
@@ -36,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({ isAuthenticated }) => {
                   { path: '/make-call', label: 'Make Call' },
                   { path: '/scenarios', label: 'Scenarios' },
                   { path: '/call-notes', label: 'Call Notes' },
+                  { path: '/scheduled-meetings', label: 'Meetings' },
                 ].map(({ path, label }) => (
                   <Link
                     key={path}

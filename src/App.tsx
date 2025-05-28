@@ -13,6 +13,7 @@ import { ScenarioProvider } from './context/ScenarioContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { MainLayout } from './components/Layout/MainLayout';
 import { CallNotes } from './pages/CallNotes';
+import { ScheduledMeetings } from './pages/ScheduledMeetings';
 
 function AppContent() {
   return (
@@ -57,6 +58,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <CallNotes />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/scheduled-meetings"
+          element={
+            <ProtectedRoute>
+              <ScheduledMeetings />
             </ProtectedRoute>
           }
         />

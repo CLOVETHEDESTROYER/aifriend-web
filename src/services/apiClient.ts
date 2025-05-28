@@ -372,18 +372,33 @@ export const api = {
   },
   calendar: {
     authorize: async () => {
-      window.location.href = `${import.meta.env.VITE_API_URL}/google-calendar/auth`;
+      try {
+        const response = await apiClient.get('/google-calendar/auth');
+        const { authorization_url } = response.data;
+        window.location.href = authorization_url;
+      } catch (error) {
+        console.error('Error getting authorization URL:', error);
+        throw new Error('Failed to initiate Google Calendar authorization');
+      }
     },
     getEvents: async () => {
       const response = await apiClient.get('/google-calendar/events');
       return response.data;
     },
+    // Check credentials by trying to fetch events - if it fails, user needs to authenticate
     checkCredentials: async () => {
-      const response = await apiClient.get('/google-calendar/credentials-status');
-      return response.data;
+      try {
+        await apiClient.get('/google-calendar/events');
+        return { has_credentials: true };
+      } catch (error) {
+        return { has_credentials: false };
+      }
     },
+    // Note: The backend doesn't have a revoke endpoint, so we'll just redirect to re-auth
     revokeAccess: async () => {
-      await apiClient.post('/google-calendar/revoke');
+      // Since there's no revoke endpoint, we'll just clear any local state
+      // and the user will need to re-authenticate
+      throw new Error('Revoke access not implemented in backend. Please re-authenticate.');
     }
   }
 };
