@@ -9,9 +9,9 @@ import {
   PhoneIcon, 
   UserGroupIcon,
   LinkIcon,
-  ExclamationTriangleIcon,
-  CheckCircleIcon,
-  ArrowPathIcon
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 
 interface CalendarEvent {
@@ -39,19 +39,16 @@ interface CalendarEvent {
   };
 }
 
-interface CredentialsStatus {
-  has_credentials: boolean;
-  needs_reauth?: boolean;
-}
+type CalendarView = 'month' | 'week' | 'day';
 
 export const ScheduledMeetings: React.FC = () => {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [credentialsStatus, setCredentialsStatus] = useState<CredentialsStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [loadingEvents, setLoadingEvents] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [isSchedulingCall, setIsSchedulingCall] = useState(false);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [view, setView] = useState<CalendarView>('month');
   
   const location = useLocation();
 
@@ -62,130 +59,62 @@ export const ScheduledMeetings: React.FC = () => {
     const state = urlParams.get('state');
     
     if (code && state) {
-      // We're returning from Google OAuth
       toast.success('Google Calendar authorization successful!');
-      // Clear the URL parameters
       window.history.replaceState({}, document.title, location.pathname);
-      // Wait a bit for backend to process tokens, then reload with retry logic
       setTimeout(async () => {
         await loadDataWithRetry();
-      }, 2000); // 2 second delay to allow backend to process OAuth tokens
+      }, 2000);
     }
   }, [location]);
 
-  const checkCredentials = async () => {
+  const loadCalendarEvents = async () => {
     try {
-      const status = await api.calendar.checkCredentials();
-      setCredentialsStatus(status);
-      return status;
-    } catch (error) {
-      console.error('Error checking credentials:', error);
-      const defaultStatus = { has_credentials: false };
-      setCredentialsStatus(defaultStatus);
-      return defaultStatus;
-    }
-  };
-
-  const loadEvents = async () => {
-    try {
-      const eventsData = await api.calendar.getEvents();
-      setEvents(eventsData);
-    } catch (error) {
-      console.error('Error loading events:', error);
-      if (error instanceof Error && error.message === 'REAUTH_REQUIRED') {
-        toast.error('Google Calendar access expired. Please reconnect your calendar.');
-        setCredentialsStatus({ has_credentials: false });
+      setLoadingEvents(true);
+      const events = await api.calendar.getEvents(100);
+      console.log('Calendar events loaded:', events);
+      setCalendarEvents(events || []);
+    } catch (error: any) {
+      console.error('Error loading calendar events:', error);
+      if (error.message === 'REAUTH_REQUIRED') {
+        setIsConnected(false);
+        toast.error('Please reconnect your Google Calendar');
       } else {
         toast.error('Failed to load calendar events');
       }
+    } finally {
+      setLoadingEvents(false);
     }
   };
 
-  // Add retry logic for loading data after OAuth
   const loadDataWithRetry = async (retries = 3) => {
-    setIsLoading(true);
     try {
-      const status = await checkCredentials();
-      setCredentialsStatus(status);
+      setLoadingEvents(true);
+      const hasCredentials = await api.calendar.checkCredentials();
+      setIsConnected(hasCredentials);
       
-      if (status.has_credentials) {
-        await loadEvents();
-        toast.success('Calendar events loaded successfully!');
+      if (hasCredentials) {
+        await loadCalendarEvents();
       }
-    } catch (error) {
-      console.error('Error loading data:', error);
+    } catch (error: any) {
+      console.error('Error loading calendar data:', error);
       if (retries > 0) {
-        console.log(`Retrying in 2 seconds... (${retries} retries left)`);
-        toast.loading(`Retrying to load calendar data... (${retries} attempts left)`, { duration: 1500 });
         setTimeout(() => {
           loadDataWithRetry(retries - 1);
         }, 2000);
         return;
       }
-      toast.error('Failed to load calendar data after multiple attempts. Please try refreshing the page.');
+      setIsConnected(false);
     } finally {
-      setIsLoading(false);
+      setLoadingEvents(false);
     }
   };
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await loadDataWithRetry();
-      toast.success('Calendar data refreshed');
-    } catch (error) {
-      console.error('Error refreshing:', error);
-      toast.error('Failed to refresh calendar data');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  const handleAuthorize = async () => {
+  const handleReconnect = async () => {
     try {
       await api.calendar.authorize();
     } catch (error) {
-      console.error('Error authorizing:', error);
-      toast.error('Failed to authorize Google Calendar. Please try again.');
-    }
-  };
-
-  const handleRevokeAccess = async () => {
-    try {
-      await api.calendar.revokeAccess();
-      setCredentialsStatus({ has_credentials: false });
-      setEvents([]);
-      toast.success('Redirecting to Google Calendar authorization...');
-    } catch (error) {
-      console.error('Error revoking access:', error);
-      toast.error('Failed to initiate re-authorization. Please try again.');
-    }
-  };
-
-  const scheduleCallForMeeting = async (event: CalendarEvent, phoneNumber: string) => {
-    setIsSchedulingCall(true);
-    try {
-      // Ensure we have a valid date string
-      const scheduledTime = event.start.dateTime || event.start.date;
-      if (!scheduledTime) {
-        toast.error('Event does not have a valid date/time');
-        return;
-      }
-
-      const callData = {
-        phone_number: phoneNumber,
-        scheduled_time: scheduledTime,
-        scenario: 'meeting_assistant' // You can customize this based on meeting type
-      };
-
-      await api.calls.scheduleCall(callData);
-      toast.success(`Call scheduled for ${event.summary}`);
-      setSelectedEvent(null);
-    } catch (error) {
-      console.error('Error scheduling call:', error);
-      toast.error('Failed to schedule call');
-    } finally {
-      setIsSchedulingCall(false);
+      console.error('Error reconnecting:', error);
+      toast.error('Failed to initiate reconnection');
     }
   };
 
@@ -193,34 +122,170 @@ export const ScheduledMeetings: React.FC = () => {
     loadDataWithRetry();
   }, []);
 
-  const formatDateTime = (dateTime: string | undefined, date: string | undefined) => {
-    const eventDate = dateTime || date;
-    if (!eventDate) return 'No date';
+  // Calendar utility functions
+  const getDaysInMonth = (date: Date) => {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  };
+
+  const getFirstDayOfMonth = (date: Date) => {
+    return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+  };
+
+  const getEventsForDate = (date: Date) => {
+    const dateStr = date.toISOString().split('T')[0];
+    return calendarEvents.filter(event => {
+      const eventStart = event.start.dateTime || event.start.date;
+      if (!eventStart) return false;
+      const eventDate = new Date(eventStart).toISOString().split('T')[0];
+      return eventDate === dateStr;
+    });
+  };
+
+  const navigateMonth = (direction: 'prev' | 'next') => {
+    setCurrentDate(prev => {
+      const newDate = new Date(prev);
+      if (direction === 'prev') {
+        newDate.setMonth(newDate.getMonth() - 1);
+      } else {
+        newDate.setMonth(newDate.getMonth() + 1);
+      }
+      return newDate;
+    });
+  };
+
+  const goToToday = () => {
+    setCurrentDate(new Date());
+  };
+
+  const formatEventTime = (event: CalendarEvent) => {
+    const startTime = event.start.dateTime || event.start.date;
+    if (!startTime) return '';
     
-    const parsedDate = new Date(eventDate);
-    if (dateTime) {
-      return parsedDate.toLocaleString();
-    } else {
-      return parsedDate.toLocaleDateString();
+    const date = new Date(startTime);
+    if (event.start.dateTime) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
+    return 'All day';
   };
 
-  const isUpcoming = (event: CalendarEvent) => {
-    const eventDate = new Date(event.start.dateTime || event.start.date || '');
-    return eventDate > new Date();
+  const isToday = (date: Date) => {
+    const today = new Date();
+    return date.toDateString() === today.toDateString();
   };
 
-  const getEventStatus = (event: CalendarEvent) => {
-    const now = new Date();
-    const startTime = new Date(event.start.dateTime || event.start.date || '');
-    const endTime = new Date(event.end.dateTime || event.end.date || '');
-    
-    if (now < startTime) return 'upcoming';
-    if (now >= startTime && now <= endTime) return 'ongoing';
-    return 'past';
+  // Render calendar grid
+  const renderCalendarGrid = () => {
+    const daysInMonth = getDaysInMonth(currentDate);
+    const firstDay = getFirstDayOfMonth(currentDate);
+    const daysArray = [];
+
+    // Add empty cells for days before the first day of the month
+    for (let i = 0; i < firstDay; i++) {
+      const prevDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), -firstDay + i + 1);
+      const events = getEventsForDate(prevDate);
+      daysArray.push(
+        <div key={`prev-${i}`} className="h-32 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-1">
+          <div className="text-sm text-gray-400 mb-1">{prevDate.getDate()}</div>
+          <div className="space-y-1">
+            {events.slice(0, 2).map(event => (
+              <div
+                key={event.id}
+                className="text-xs p-1 bg-gray-300 dark:bg-gray-600 rounded cursor-pointer hover:bg-gray-400 dark:hover:bg-gray-500 truncate"
+                onClick={() => setSelectedEvent(event)}
+                title={event.summary}
+              >
+                {event.summary}
+              </div>
+            ))}
+            {events.length > 2 && (
+              <div className="text-xs text-gray-500">+{events.length - 2} more</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Add days of the current month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+      const events = getEventsForDate(date);
+      const isCurrentDay = isToday(date);
+      
+      daysArray.push(
+        <div 
+          key={day} 
+          className={`h-32 border border-gray-200 dark:border-gray-700 p-1 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${
+            isCurrentDay ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-white dark:bg-gray-900'
+          }`}
+        >
+          <div className={`text-sm mb-1 ${
+            isCurrentDay 
+              ? 'font-bold text-blue-600 dark:text-blue-400' 
+              : 'text-gray-900 dark:text-gray-100'
+          }`}>
+            {day}
+          </div>
+          <div className="space-y-1">
+            {events.slice(0, 3).map(event => (
+              <div
+                key={event.id}
+                className="text-xs p-1 bg-blue-500 text-white rounded cursor-pointer hover:bg-blue-600 truncate"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedEvent(event);
+                }}
+                title={`${formatEventTime(event)} ${event.summary}`}
+              >
+                <div className="flex items-center space-x-1">
+                  <span className="font-medium">{formatEventTime(event)}</span>
+                  <span className="truncate">{event.summary}</span>
+                </div>
+              </div>
+            ))}
+            {events.length > 3 && (
+              <div className="text-xs text-gray-500 cursor-pointer" onClick={() => {
+                // Show all events for this day
+                toast.success(`${events.length} events on ${date.toLocaleDateString()}`);
+              }}>
+                +{events.length - 3} more
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Add days from next month to fill the grid
+    const remainingCells = 42 - daysArray.length; // 6 rows * 7 days
+    for (let i = 1; i <= remainingCells; i++) {
+      const nextDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i);
+      const events = getEventsForDate(nextDate);
+      daysArray.push(
+        <div key={`next-${i}`} className="h-32 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-1">
+          <div className="text-sm text-gray-400 mb-1">{nextDate.getDate()}</div>
+          <div className="space-y-1">
+            {events.slice(0, 2).map(event => (
+              <div
+                key={event.id}
+                className="text-xs p-1 bg-gray-300 dark:bg-gray-600 rounded cursor-pointer hover:bg-gray-400 dark:hover:bg-gray-500 truncate"
+                onClick={() => setSelectedEvent(event)}
+                title={event.summary}
+              >
+                {event.summary}
+              </div>
+            ))}
+            {events.length > 2 && (
+              <div className="text-xs text-gray-500">+{events.length - 2} more</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return daysArray;
   };
 
-  if (isLoading) {
+  if (loadingEvents) {
     return (
       <PageContainer>
         <div className="flex items-center justify-center h-64">
@@ -230,12 +295,12 @@ export const ScheduledMeetings: React.FC = () => {
     );
   }
 
-  if (!credentialsStatus?.has_credentials) {
+  if (!isConnected) {
     return (
       <PageContainer>
         <div className="border-b border-border-light dark:border-border-dark px-6 pb-6 pt-4">
           <h1 className="text-2xl font-semibold text-text-light dark:text-text-dark">
-            Scheduled Meetings
+            Google Calendar
           </h1>
         </div>
         
@@ -246,10 +311,10 @@ export const ScheduledMeetings: React.FC = () => {
               Connect Your Google Calendar
             </h2>
             <p className="text-text-secondary dark:text-text-secondary-dark mb-6">
-              Connect your Google Calendar to view upcoming meetings and schedule AI-powered calls for them.
+              Connect your Google Calendar to view and manage your events with AI-powered features.
             </p>
             <button
-              onClick={handleAuthorize}
+              onClick={handleReconnect}
               className="bg-accent hover:bg-accent-dark text-white px-6 py-3 rounded-lg font-medium transition-colors"
             >
               Connect Google Calendar
@@ -262,183 +327,178 @@ export const ScheduledMeetings: React.FC = () => {
 
   return (
     <PageContainer>
-      <div className="border-b border-border-light dark:border-border-dark px-6 pb-6 pt-4">
+      {/* Header */}
+      <div className="border-b border-border-light dark:border-border-dark px-6 pb-4 pt-4">
         <div className="flex justify-between items-center">
-          <div>
+          <div className="flex items-center space-x-4">
             <h1 className="text-2xl font-semibold text-text-light dark:text-text-dark">
-              Scheduled Meetings
+              Calendar
             </h1>
-            <p className="text-sm text-text-secondary dark:text-text-secondary-dark mt-1">
-              Google Calendar connected
-            </p>
-          </div>
-          <div className="flex space-x-2">
             <button
-              onClick={handleRefresh}
+              onClick={goToToday}
+              className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              Today
+            </button>
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => {
+                setIsRefreshing(true);
+                loadDataWithRetry().finally(() => setIsRefreshing(false));
+              }}
               disabled={isRefreshing}
               className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
             >
               <ArrowPathIcon className={`h-5 w-5 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
-            <button
-              onClick={handleRevokeAccess}
-              className="px-4 py-2 text-sm text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-colors"
-            >
-              Re-authenticate
-            </button>
           </div>
         </div>
       </div>
 
-      <div className="p-6">
-        {events.length === 0 ? (
-          <div className="text-center py-12">
-            <CalendarIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-text-light dark:text-text-dark mb-2">
-              No upcoming meetings
-            </h3>
-            <p className="text-text-secondary dark:text-text-secondary-dark">
-              Your calendar is clear for now.
-            </p>
+      {/* Navigation Bar */}
+      <div className="border-b border-border-light dark:border-border-dark px-6 py-4">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-1">
+              <button
+                onClick={() => navigateMonth('prev')}
+                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              >
+                <ChevronLeftIcon className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() => navigateMonth('next')}
+                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              >
+                <ChevronRightIcon className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <h2 className="text-xl font-semibold text-text-light dark:text-text-dark">
+              {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            </h2>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {events.map((event) => {
-              const status = getEventStatus(event);
-              const statusColors = {
-                upcoming: 'border-l-blue-500 bg-blue-50 dark:bg-blue-900/20',
-                ongoing: 'border-l-green-500 bg-green-50 dark:bg-green-900/20',
-                past: 'border-l-gray-500 bg-gray-50 dark:bg-gray-900/20'
-              };
 
-              return (
-                <div
-                  key={event.id}
-                  className={`border-l-4 ${statusColors[status]} border border-border-light dark:border-border-dark rounded-lg p-6`}
+          <div className="flex items-center space-x-2">
+            <div className="flex border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
+              {(['month', 'week', 'day'] as CalendarView[]).map((viewType) => (
+                <button
+                  key={viewType}
+                  onClick={() => setView(viewType)}
+                  className={`px-3 py-1 text-sm capitalize transition-colors ${
+                    view === viewType
+                      ? 'bg-accent text-white'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+                  }`}
                 >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-2">
-                        <h3 className="text-lg font-semibold text-text-light dark:text-text-dark">
-                          {event.summary}
-                        </h3>
-                        {status === 'ongoing' && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                            Live
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="flex items-center space-x-4 text-sm text-text-secondary dark:text-text-secondary-dark mb-3">
-                        <div className="flex items-center space-x-1">
-                          <ClockIcon className="h-4 w-4" />
-                          <span>
-                            {formatDateTime(event.start.dateTime, event.start.date)} - {formatDateTime(event.end.dateTime, event.end.date)}
-                          </span>
-                        </div>
-                        
-                        {event.attendees && (
-                          <div className="flex items-center space-x-1">
-                            <UserGroupIcon className="h-4 w-4" />
-                            <span>{event.attendees.length} attendees</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {event.description && (
-                        <p className="text-sm text-text-secondary dark:text-text-secondary-dark mb-3 line-clamp-2">
-                          {event.description}
-                        </p>
-                      )}
-
-                      {event.location && (
-                        <p className="text-sm text-text-secondary dark:text-text-secondary-dark mb-3">
-                          📍 {event.location}
-                        </p>
-                      )}
-
-                      <div className="flex items-center space-x-4">
-                        {event.htmlLink && (
-                          <a
-                            href={event.htmlLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center space-x-1 text-sm text-accent hover:text-accent-dark transition-colors"
-                          >
-                            <LinkIcon className="h-4 w-4" />
-                            <span>View in Calendar</span>
-                          </a>
-                        )}
-                        
-                        {isUpcoming(event) && (
-                          <button
-                            onClick={() => setSelectedEvent(event)}
-                            className="inline-flex items-center space-x-1 text-sm text-accent hover:text-accent-dark transition-colors"
-                          >
-                            <PhoneIcon className="h-4 w-4" />
-                            <span>Schedule AI Call</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                  {viewType}
+                </button>
+              ))}
+            </div>
           </div>
-        )}
+        </div>
       </div>
 
-      {/* Schedule Call Modal */}
+      {/* Calendar Grid */}
+      <div className="p-6">
+        {/* Days of week header */}
+        <div className="grid grid-cols-7 gap-0 mb-2">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+            <div key={day} className="p-2 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div className="grid grid-cols-7 gap-0 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          {renderCalendarGrid()}
+        </div>
+
+        {/* Event count */}
+        <div className="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
+          Showing {calendarEvents.length} events
+        </div>
+      </div>
+
+      {/* Event Detail Modal */}
       {selectedEvent && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-text-light dark:text-text-dark mb-4">
-              Schedule AI Call for Meeting
-            </h3>
-            
-            <div className="mb-4">
-              <p className="text-sm text-text-secondary dark:text-text-secondary-dark mb-2">
-                Meeting: {selectedEvent.summary}
-              </p>
-              <p className="text-sm text-text-secondary dark:text-text-secondary-dark">
-                Time: {formatDateTime(selectedEvent.start.dateTime, selectedEvent.start.date)}
-              </p>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
-                Phone Number
-              </label>
-              <input
-                type="tel"
-                placeholder="Enter phone number"
-                className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-white dark:bg-gray-700 text-text-light dark:text-text-dark"
-                id="phone-input"
-              />
-            </div>
-
-            <div className="flex space-x-3">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-start mb-4">
+              <h3 className="text-lg font-semibold text-text-light dark:text-text-dark">
+                {selectedEvent.summary}
+              </h3>
               <button
                 onClick={() => setSelectedEvent(null)}
-                className="flex-1 px-4 py-2 text-sm font-medium text-text-secondary dark:text-text-secondary-dark border border-border-light dark:border-border-dark rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
-                Cancel
+                ✕
               </button>
-              <button
-                onClick={() => {
-                  const phoneInput = document.getElementById('phone-input') as HTMLInputElement;
-                  if (phoneInput?.value) {
-                    scheduleCallForMeeting(selectedEvent, phoneInput.value);
-                  } else {
-                    toast.error('Please enter a phone number');
-                  }
-                }}
-                disabled={isSchedulingCall}
-                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-dark rounded-lg transition-colors disabled:opacity-50"
-              >
-                {isSchedulingCall ? 'Scheduling...' : 'Schedule Call'}
-              </button>
+            </div>
+            
+            <div className="space-y-3">
+              <div className="flex items-center space-x-2 text-sm">
+                <ClockIcon className="h-4 w-4 text-gray-500" />
+                <span>
+                  {new Date(selectedEvent.start.dateTime || selectedEvent.start.date || '').toLocaleDateString()} 
+                  {selectedEvent.start.dateTime && (
+                    <span className="ml-1">
+                      {formatEventTime(selectedEvent)} - {
+                        new Date(selectedEvent.end.dateTime || selectedEvent.end.date || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      }
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              {selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
+                <div className="flex items-center space-x-2 text-sm">
+                  <UserGroupIcon className="h-4 w-4 text-gray-500" />
+                  <span>{selectedEvent.attendees.length} attendees</span>
+                </div>
+              )}
+
+              {selectedEvent.location && (
+                <div className="flex items-center space-x-2 text-sm">
+                  <span className="text-gray-500">📍</span>
+                  <span>{selectedEvent.location}</span>
+                </div>
+              )}
+
+              {selectedEvent.description && (
+                <div className="text-sm">
+                  <strong>Description:</strong>
+                  <p className="mt-1 text-gray-600 dark:text-gray-400">{selectedEvent.description}</p>
+                </div>
+              )}
+
+              <div className="flex space-x-3 pt-4">
+                {selectedEvent.htmlLink && (
+                  <a
+                    href={selectedEvent.htmlLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center space-x-1 text-sm text-accent hover:text-accent-dark"
+                  >
+                    <LinkIcon className="h-4 w-4" />
+                    <span>Open in Google Calendar</span>
+                  </a>
+                )}
+                
+                <button
+                  onClick={() => {
+                    // You can implement scheduling logic here
+                    toast.success('AI call scheduling coming soon!');
+                  }}
+                  className="flex items-center space-x-1 text-sm text-accent hover:text-accent-dark"
+                >
+                  <PhoneIcon className="h-4 w-4" />
+                  <span>Schedule AI Call</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

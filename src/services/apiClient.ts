@@ -398,9 +398,22 @@ export const api = {
         throw new Error('Failed to initiate Google Calendar authorization');
       }
     },
-    getEvents: async () => {
+    getEvents: async (maxResults = 50) => {
       try {
-        const response = await apiClient.get('/google-calendar/events');
+        // Get events from 1 month ago to 6 months in the future
+        const timeMin = new Date();
+        timeMin.setMonth(timeMin.getMonth() - 1);
+        
+        const timeMax = new Date();
+        timeMax.setMonth(timeMax.getMonth() + 6);
+        
+        const params = new URLSearchParams({
+          max_results: maxResults.toString(),
+          time_min: timeMin.toISOString(),
+          time_max: timeMax.toISOString()
+        });
+        
+        const response = await apiClient.get(`/google-calendar/events?${params}`);
         return response.data;
       } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === 500) {
@@ -416,47 +429,28 @@ export const api = {
     // Check credentials by trying to fetch events - if it fails, user needs to authenticate
     checkCredentials: async () => {
       try {
-        await apiClient.get('/google-calendar/events');
-        return { has_credentials: true };
+        await apiClient.get('/google-calendar/events?max_results=1');
+        return true;
       } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === 500) {
           const errorDetail = (error.response?.data as any)?.detail as string;
           if (errorDetail && errorDetail.includes('invalid_grant')) {
-            // Token exists but is invalid/expired
-            return { has_credentials: false, needs_reauth: true };
+            return false;
           }
-          // For other 500 errors during OAuth flow, assume credentials are being processed
-          return { has_credentials: false };
         }
-        return { has_credentials: false };
+        throw error;
       }
     },
-    // Add a method to wait for credentials to be ready after OAuth
-    waitForCredentials: async (maxAttempts = 5, delayMs = 2000) => {
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const status = await api.calendar.checkCredentials();
-          if (status.has_credentials) {
-            return status;
-          }
-          if (attempt < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-          }
-        } catch (error) {
-          if (attempt === maxAttempts) throw error;
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
+    makeCalendarCall: async (phoneNumber: string) => {
+      try {
+        const response = await apiClient.get(`/make-calendar-call-scenario/${phoneNumber}`);
+        return response.data;
+      } catch (error) {
+        console.error('Error making calendar call:', error);
+        throw error;
       }
-      return { has_credentials: false };
-    },
-    // Note: The backend doesn't have a revoke endpoint, so we'll just redirect to re-auth
-    revokeAccess: async () => {
-      // Since there's no revoke endpoint, we'll just trigger re-authorization
-      const response = await apiClient.get('/google-calendar/auth');
-      const { authorization_url } = response.data;
-      window.location.href = authorization_url;
-    },
-  }
+    }
+  },
 };
 
 export default api;
