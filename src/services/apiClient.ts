@@ -37,7 +37,7 @@ apiClient.interceptors.response.use(
       status: error.response?.status,
       data: error.response?.data,
       headers: error.config?.headers,
-      serverError: error.response?.data?.detail || error.response?.data
+      serverError: (error.response?.data as any)?.detail || error.response?.data
     });
 
     if (!error.response) {
@@ -46,8 +46,8 @@ apiClient.interceptors.response.use(
 
     // Handle 401 Unauthorized
     if (error.response.status === 401) {
-      if (!error.config?._retry && !error.config?.url?.includes('/token')) {
-        error.config._retry = true;
+      if (!(error.config as any)?._retry && !error.config?.url?.includes('/token')) {
+        (error.config as any)._retry = true;
         localStorage.removeItem('token');
         window.location.href = '/login';
         return;
@@ -56,7 +56,7 @@ apiClient.interceptors.response.use(
 
     // Handle 500 Internal Server Error
     if (error.response.status === 500) {
-      const errorDetail = error.response.data?.detail || error.response.data;
+      const errorDetail = (error.response.data as any)?.detail || error.response.data;
       console.error('Server Error Details:', errorDetail);
       throw new Error(`Server error: ${errorDetail || 'An unexpected error occurred'}`);
     }
@@ -71,7 +71,7 @@ apiClient.interceptors.response.use(
       throw new Error('Unable to connect to the server. Please try again later.');
     }
 
-    const errorMessage = error.response?.data?.detail || error.response?.data || error.message || 'An error occurred';
+    const errorMessage = (error.response?.data as any)?.detail || error.response?.data || error.message || 'An error occurred';
     throw new Error(errorMessage);
   }
 );
@@ -84,7 +84,6 @@ export interface LoginCredentials {
 export interface RegisterData {
   email: string;
   password: string;
-  name: string;
 }
 
 export interface UserProfile {
@@ -239,6 +238,24 @@ export const api = {
         return response.data;
       } catch (error) {
         if (axios.isAxiosError(error)) {
+          if (error.response?.status === 400) {
+            const detail = error.response?.data?.detail;
+            if (detail && detail.includes('already registered')) {
+              throw new Error('Email already registered');
+            }
+            throw new Error(detail || 'Registration failed - invalid data');
+          }
+          if (error.response?.status === 500) {
+            // Backend has a bug where it creates the user but returns 500
+            // We'll treat this as a potential success and let the auto-login handle it
+            console.warn('Registration returned 500 but user may have been created. Attempting auto-login...');
+            return { message: 'Registration may have succeeded despite server error' };
+          }
+          if (error.code === 'ERR_NETWORK' || !error.response) {
+            // Network error or no response - could be a 500 that didn't get through
+            console.warn('Network error during registration. User may have been created. Attempting auto-login...');
+            return { message: 'Registration may have succeeded despite network error' };
+          }
           throw new Error(error.response?.data?.detail || 'Registration failed');
         }
         throw error;
@@ -382,8 +399,19 @@ export const api = {
       }
     },
     getEvents: async () => {
-      const response = await apiClient.get('/google-calendar/events');
-      return response.data;
+      try {
+        const response = await apiClient.get('/google-calendar/events');
+        return response.data;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          const errorDetail = (error.response?.data as any)?.detail as string;
+          if (errorDetail && errorDetail.includes('invalid_grant')) {
+            // Token has expired or is invalid, need to re-authorize
+            throw new Error('REAUTH_REQUIRED');
+          }
+        }
+        throw error;
+      }
     },
     // Check credentials by trying to fetch events - if it fails, user needs to authenticate
     checkCredentials: async () => {
@@ -391,15 +419,43 @@ export const api = {
         await apiClient.get('/google-calendar/events');
         return { has_credentials: true };
       } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          const errorDetail = (error.response?.data as any)?.detail as string;
+          if (errorDetail && errorDetail.includes('invalid_grant')) {
+            // Token exists but is invalid/expired
+            return { has_credentials: false, needs_reauth: true };
+          }
+          // For other 500 errors during OAuth flow, assume credentials are being processed
+          return { has_credentials: false };
+        }
         return { has_credentials: false };
       }
     },
+    // Add a method to wait for credentials to be ready after OAuth
+    waitForCredentials: async (maxAttempts = 5, delayMs = 2000) => {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const status = await api.calendar.checkCredentials();
+          if (status.has_credentials) {
+            return status;
+          }
+          if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+        } catch (error) {
+          if (attempt === maxAttempts) throw error;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+      return { has_credentials: false };
+    },
     // Note: The backend doesn't have a revoke endpoint, so we'll just redirect to re-auth
     revokeAccess: async () => {
-      // Since there's no revoke endpoint, we'll just clear any local state
-      // and the user will need to re-authenticate
-      throw new Error('Revoke access not implemented in backend. Please re-authenticate.');
-    }
+      // Since there's no revoke endpoint, we'll just trigger re-authorization
+      const response = await apiClient.get('/google-calendar/auth');
+      const { authorization_url } = response.data;
+      window.location.href = authorization_url;
+    },
   }
 };
 

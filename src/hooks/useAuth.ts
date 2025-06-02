@@ -7,7 +7,7 @@ interface AuthState {
   token: string | null;
   user: UserProfile | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: () => Promise<void>;
 }
@@ -35,18 +35,34 @@ const useAuthStore = create<AuthState>()(
           throw error;
         }
       },
-      register: async (email: string, password: string, name: string) => {
+      register: async (email: string, password: string) => {
         try {
           await api.auth.register({
             email,
             password,
-            name,
           });
 
           // After registration, log in automatically
           await useAuthStore.getState().login(email, password);
         } catch (error) {
           console.error('Registration error:', error);
+          
+          // If registration failed but user might have been created, try to log in
+          if (error instanceof Error && 
+              (error.message.includes('may have succeeded') || 
+               error.message.includes('Network error'))) {
+            try {
+              console.log('Attempting auto-login after potential registration success...');
+              await useAuthStore.getState().login(email, password);
+              // If login succeeds, registration actually worked
+              return;
+            } catch (loginError) {
+              // If login fails, registration truly failed
+              console.error('Auto-login failed, registration truly failed:', loginError);
+              throw new Error('Registration failed. Please try again or contact support if the issue persists.');
+            }
+          }
+          
           throw error;
         }
       },

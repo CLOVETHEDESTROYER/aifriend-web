@@ -5,10 +5,9 @@ import { toast } from 'react-hot-toast';
 
 export const RegisterForm: React.FC = () => {
   const [formData, setFormData] = useState({
-    username: '',
+    email: '',
     password: '',
     confirmPassword: '',
-    name: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const { register } = useAuth();
@@ -24,12 +23,18 @@ export const RegisterForm: React.FC = () => {
 
     setIsLoading(true);
     try {
-      await register(formData.username, formData.password, formData.name);
-      toast.success('Registration successful! Please sign in.');
-      navigate('/login');
+      await register(formData.email, formData.password);
+      toast.success('Registration successful! You are now logged in.');
+      navigate('/dashboard');
     } catch (error) {
       console.error('Registration error:', error);
-      toast.error(error instanceof Error ? error.message : 'Registration failed. Please try again.');
+      
+      // Check if the error message suggests the user might have been created
+      if (error instanceof Error && error.message.includes('Registration failed. Please try again or contact support')) {
+        toast.error('Registration encountered an issue. Please try logging in with your credentials, or try registering again.');
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Registration failed. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -45,37 +50,19 @@ export const RegisterForm: React.FC = () => {
         </div>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Full Name
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Email
             </label>
             <div className="mt-1">
               <input
-                id="name"
-                name="name"
-                type="text"
+                id="email"
+                name="email"
+                type="email"
                 required
-                value={formData.name}
-                onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                value={formData.email}
+                onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
                 className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                placeholder="Enter your full name"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Username
-            </label>
-            <div className="mt-1">
-              <input
-                id="username"
-                name="username"
-                type="text"
-                required
-                value={formData.username}
-                onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
-                className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                placeholder="Choose a username"
+                placeholder="Enter your email"
               />
             </div>
           </div>
@@ -119,7 +106,7 @@ export const RegisterForm: React.FC = () => {
           <div>
             <button
               type="submit"
-              disabled={isLoading || !formData.username || !formData.password || !formData.name || !formData.confirmPassword}
+              disabled={isLoading || !formData.email || !formData.password || !formData.confirmPassword}
               className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? 'Creating account...' : 'Create account'}

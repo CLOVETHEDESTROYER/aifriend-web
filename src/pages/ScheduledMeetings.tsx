@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PageContainer } from '../components/Layout/PageContainer';
 import api from '../services/apiClient';
 import { toast } from 'react-hot-toast';
+import { useLocation } from 'react-router-dom';
 import { 
   CalendarIcon, 
   ClockIcon, 
@@ -40,7 +41,7 @@ interface CalendarEvent {
 
 interface CredentialsStatus {
   has_credentials: boolean;
-  user_email?: string;
+  needs_reauth?: boolean;
 }
 
 export const ScheduledMeetings: React.FC = () => {
@@ -49,39 +50,79 @@ export const ScheduledMeetings: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [isSchedulingCall, setIsSchedulingCall] = useState(false);
+  
+  const location = useLocation();
+
+  // Check if we're returning from OAuth callback
+  useEffect(() => {
+    const urlParams = new URLSearchParams(location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    
+    if (code && state) {
+      // We're returning from Google OAuth
+      toast.success('Google Calendar authorization successful!');
+      // Clear the URL parameters
+      window.history.replaceState({}, document.title, location.pathname);
+      // Wait a bit for backend to process tokens, then reload with retry logic
+      setTimeout(async () => {
+        await loadDataWithRetry();
+      }, 2000); // 2 second delay to allow backend to process OAuth tokens
+    }
+  }, [location]);
 
   const checkCredentials = async () => {
     try {
       const status = await api.calendar.checkCredentials();
       setCredentialsStatus(status);
-      return status.has_credentials;
+      return status;
     } catch (error) {
       console.error('Error checking credentials:', error);
-      setCredentialsStatus({ has_credentials: false });
-      return false;
+      const defaultStatus = { has_credentials: false };
+      setCredentialsStatus(defaultStatus);
+      return defaultStatus;
     }
   };
 
-  const fetchEvents = async () => {
+  const loadEvents = async () => {
     try {
       const eventsData = await api.calendar.getEvents();
       setEvents(eventsData);
     } catch (error) {
-      console.error('Error fetching events:', error);
-      toast.error('Failed to fetch calendar events');
+      console.error('Error loading events:', error);
+      if (error instanceof Error && error.message === 'REAUTH_REQUIRED') {
+        toast.error('Google Calendar access expired. Please reconnect your calendar.');
+        setCredentialsStatus({ has_credentials: false });
+      } else {
+        toast.error('Failed to load calendar events');
+      }
     }
   };
 
-  const loadData = async () => {
+  // Add retry logic for loading data after OAuth
+  const loadDataWithRetry = async (retries = 3) => {
     setIsLoading(true);
     try {
-      const hasCredentials = await checkCredentials();
-      if (hasCredentials) {
-        await fetchEvents();
+      const status = await checkCredentials();
+      setCredentialsStatus(status);
+      
+      if (status.has_credentials) {
+        await loadEvents();
+        toast.success('Calendar events loaded successfully!');
       }
     } catch (error) {
       console.error('Error loading data:', error);
+      if (retries > 0) {
+        console.log(`Retrying in 2 seconds... (${retries} retries left)`);
+        toast.loading(`Retrying to load calendar data... (${retries} attempts left)`, { duration: 1500 });
+        setTimeout(() => {
+          loadDataWithRetry(retries - 1);
+        }, 2000);
+        return;
+      }
+      toast.error('Failed to load calendar data after multiple attempts. Please try refreshing the page.');
     } finally {
       setIsLoading(false);
     }
@@ -90,10 +131,11 @@ export const ScheduledMeetings: React.FC = () => {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await fetchEvents();
-      toast.success('Calendar events refreshed');
+      await loadDataWithRetry();
+      toast.success('Calendar data refreshed');
     } catch (error) {
-      toast.error('Failed to refresh events');
+      console.error('Error refreshing:', error);
+      toast.error('Failed to refresh calendar data');
     } finally {
       setIsRefreshing(false);
     }
@@ -113,10 +155,10 @@ export const ScheduledMeetings: React.FC = () => {
       await api.calendar.revokeAccess();
       setCredentialsStatus({ has_credentials: false });
       setEvents([]);
-      toast.success('Google Calendar access revoked');
+      toast.success('Redirecting to Google Calendar authorization...');
     } catch (error) {
       console.error('Error revoking access:', error);
-      toast.error('Revoke access not available. Please re-authenticate to change permissions.');
+      toast.error('Failed to initiate re-authorization. Please try again.');
     }
   };
 
@@ -148,7 +190,7 @@ export const ScheduledMeetings: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
+    loadDataWithRetry();
   }, []);
 
   const formatDateTime = (dateTime: string | undefined, date: string | undefined) => {
@@ -226,11 +268,9 @@ export const ScheduledMeetings: React.FC = () => {
             <h1 className="text-2xl font-semibold text-text-light dark:text-text-dark">
               Scheduled Meetings
             </h1>
-            {credentialsStatus?.user_email && (
-              <p className="text-sm text-text-secondary dark:text-text-secondary-dark mt-1">
-                Connected as {credentialsStatus.user_email}
-              </p>
-            )}
+            <p className="text-sm text-text-secondary dark:text-text-secondary-dark mt-1">
+              Google Calendar connected
+            </p>
           </div>
           <div className="flex space-x-2">
             <button

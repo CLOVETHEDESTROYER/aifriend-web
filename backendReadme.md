@@ -1,253 +1,360 @@
-# Speech Assistant API
-
-A powerful API for creating and managing voice assistants powered by OpenAI's Realtime API and Twilio Voice Services.
+# Backend Integration Guide for Speech Assistant SaaS
 
 ## Overview
 
-This application provides a complete solution for creating realistic voice assistants that can:
+This guide provides comprehensive documentation for integrating with the Speech Assistant backend API. The backend is a multi-tenant SaaS platform that provides AI-powered voice calling, Google Calendar integration, user-specific scenarios, and enhanced transcript management.
 
-- Make outbound calls with AI-powered voice interaction using various scenarios.
-- Process incoming calls with natural language understanding.
-- Schedule calls for later execution.
-- Automatically transcribe call recordings using Twilio Voice Intelligence.
-- Store and retrieve call transcripts with enhanced conversation flow analysis, including sentence-level details with speaker identification and participant roles.
-- Create and manage custom conversation scenarios.
-- Stream real-time audio between users and OpenAI's voice models using WebRTC for interactive sessions.
-- Offer direct audio transcription via OpenAI Whisper API.
-- Integrate with Google Calendar for making calendar-aware calls (experimental).
+## Architecture
 
-## Core Features
-
-- **Dynamic Voice Interaction**: Engage in natural, real-time conversations powered by OpenAI.
-- **Twilio Integration**: Leverages Twilio for PSTN connectivity (making/receiving calls) and call recording.
-- **OpenAI Realtime API & Whisper**: Utilizes OpenAI for generating voice responses in real-time and for direct audio file transcription.
-- **Enhanced Twilio Voice Intelligence**:
-  - Automated transcription of call recordings with advanced conversation flow analysis
-  - Speaker identification and role assignment (AI agent vs customer)
-  - Detailed conversation statistics and participant information
-  - Structured conversation flow with timestamps and confidence scores
-  - Results stored locally with enhanced metadata for frontend consumption
-- **Comprehensive Call Management**:
-  - Outbound calls to specified phone numbers using predefined or custom scenarios.
-  - Incoming call handling with routing to appropriate scenarios.
-  - Call scheduling for future execution.
-- **Scenario Management**:
-  - Define custom personas, prompts, and voice configurations for varied call interactions.
-  - CRUD operations for custom scenarios.
-- **Enhanced Transcription Services**:
-  - Automatic transcription of recorded Twilio calls with conversation flow analysis
-  - Enhanced transcript endpoints with participant identification and conversation structure
-  - Webhook for receiving completed transcripts from Twilio with automatic enhancement
-  - Local storage of transcripts with enhanced metadata for quick retrieval
-  - Endpoints to list and fetch enhanced transcripts with filtering options
-  - Detailed sentence-by-sentence data with speaker channels, roles, and conversation flow
-  - Direct transcription of uploaded audio files using OpenAI Whisper
-  - Import functionality to enhance existing Twilio transcripts
-- **Authentication & Authorization**:
-  - Secure JWT-based authentication (access and refresh tokens).
-  - OAuth2 compatible token endpoint.
-  - CAPTCHA protection on registration and login.
-- **Real-time Media Streaming**:
-  - WebSocket endpoints for streaming audio data between the client, the server, and OpenAI during a live call.
-  - WebRTC signaling support for establishing peer-to-peer connections if needed by a frontend.
-- **Database & ORM**:
-  - SQLAlchemy for database interaction with enhanced transcript schema.
-  - Alembic for database migrations.
-  - Supports SQLite for development and PostgreSQL for production.
-- **Configuration & Logging**:
-  - Environment variable-based configuration.
-  - Detailed logging with rotation and sensitive data filtering.
-- **Security**:
-  - Rate limiting on sensitive endpoints.
-  - Standard security headers (CSP, HSTS, XSS Protection, etc.).
-- **Google Calendar Integration (Experimental)**:
-  - OAuth2 flow for connecting a user's Google Calendar.
-  - Endpoints to make calls that can reference calendar events.
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.8+
-- Node.js and npm/yarn (if running the frontend module)
-- OpenAI API key with access to the Realtime API and Whisper.
-- Twilio account with Voice services, a Twilio phone number, and a Voice Intelligence Service configured.
-- PostgreSQL (optional, SQLite available for development by default).
-- Ngrok or similar tunneling service for local development with Twilio webhooks.
-
-### Backend Installation
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/yourusername/speech-assistant-api.git
-   cd speech-assistant-api
-   ```
-
-2. Create and activate a Python virtual environment:
-
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\\Scripts\\activate
-   ```
-
-3. Install Python dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Configure environment variables:
-
-   - Copy `.env.example` to `.env`.
-   - Edit `.env` with your API keys (OpenAI, Twilio Account SID, Auth Token, Phone Number, Voice Intelligence Service SID), database URL, secret key, and `PUBLIC_URL` (your Ngrok URL without `https://` for local development, e.g., `your-ngrok-id.ngrok-free.app`).
-   - Ensure `USE_TWILIO_VOICE_INTELLIGENCE=true` and your `TWILIO_VOICE_INTELLIGENCE_SID` are correctly set.
-
-5. Set up Twilio Webhooks:
-
-   - **TwiML App/Phone Number Status Callback URL (for Recordings):** Point this to `https://YOUR_NGROK_URL/recording-callback` (HTTP POST). This triggers transcription initiation.
-   - **Twilio Voice Intelligence Service Webhook URL (for Transcript Completion):** Point this to `https://YOUR_NGROK_URL/twilio-transcripts/webhook-callback` (HTTP POST). This processes and stores the transcript with enhanced analysis.
-
-6. Run database migrations:
-
-   ```bash
-   alembic upgrade head
-   ```
-
-7. Run the backend application:
-   ```bash
-   uvicorn app.main:app --reload --port 5050
-   ```
-   Ensure Ngrok is forwarding to this port, e.g., `ngrok http 5050`.
-
-### Enhanced Transcript Workflow
-
-The application now provides an enhanced transcript workflow that captures detailed conversation flow and participant information:
-
-1. **Make a Call**: Use any of the call endpoints to initiate a call
-2. **Automatic Processing**: When the call ends and recording is available:
-   - Twilio calls `/recording-callback` webhook
-   - System creates a Twilio Intelligence transcript
-   - When transcript is complete, Twilio calls `/twilio-transcripts/webhook-callback`
-   - System automatically enhances the transcript with conversation flow analysis
-3. **Access Enhanced Data**: Use the enhanced transcript endpoints to retrieve structured conversation data
-
-**Recommended Workflow for Frontend Integration:**
-
-```bash
-# 1. Make a call
-GET /make-call/{phone_number}/{scenario}
-
-# 2. List enhanced transcripts (after call completion)
-GET /api/enhanced-transcripts/
-
-# 3. Get detailed transcript with conversation flow
-GET /api/enhanced-transcripts/{transcript_sid}
-
-# 4. Or manually import/enhance existing transcripts
-POST /api/import-twilio-transcripts
-POST /api/enhanced-twilio-transcripts/fetch-and-store
+```
+Frontend (React/Vite) ←→ Backend (FastAPI) ←→ External Services
+     ↓                        ↓                    ↓
+- User Interface         - JWT Authentication    - OpenAI Realtime API
+- OAuth Handling         - User Isolation        - Twilio Voice/SMS
+- API Calls              - Database (SQLite/PG)  - Google Calendar API
+- WebSocket Streams      - WebSocket Streams     - Twilio Intelligence
 ```
 
-### Frontend Installation & Running (Example for a typical React/Vite setup)
+## Environment Configuration
 
-(Instructions to be confirmed once `package.json` location and scripts are verified)
+### Backend (.env)
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend # Or the correct path to your frontend's package.json
-   ```
-2. Install dependencies:
-   ```bash
-   npm install # or yarn install
-   ```
-3. Start the frontend development server:
-   ```bash
-   npm run dev # or npm start, or yarn dev/start
-   ```
-   The frontend will likely run on a different port (e.g., `http://localhost:5173` or `http://localhost:3000`). Ensure this origin is added to the `CORSMiddleware` in `app/main.py`.
+```bash
+# Core Configuration
+SECRET_KEY=your_secret_key_here
+DATABASE_URL=sqlite:///./sql_app.db
+PUBLIC_URL=your-ngrok-id.ngrok-free.app
+FRONTEND_URL=http://localhost:5173
 
-## API Endpoint Documentation
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key
 
-The API is documented with OpenAPI and can be accessed at `/docs` when the backend is running (e.g., `http://localhost:5050/docs`).
+# Twilio Configuration
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=+1234567890
+USE_TWILIO_VOICE_INTELLIGENCE=true
+TWILIO_VOICE_INTELLIGENCE_SID=your_voice_intelligence_sid
 
-**Base URL for API calls:** `https://YOUR_PUBLIC_URL` (e.g., your Ngrok URL or production domain)
+# Google Calendar Configuration
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_REDIRECT_URI=http://localhost:5050/google-calendar/callback
+```
 
-### Authentication
+### Frontend (.env)
 
-All protected endpoints require a JWT Bearer token in the `Authorization` header.
+```bash
+VITE_API_URL=http://localhost:5050
+```
 
-| Endpoint            | Method | Description                                        | Request Body                          | Response (Success 200/201)                   |
-| ------------------- | ------ | -------------------------------------------------- | ------------------------------------- | -------------------------------------------- |
-| `/auth/register`    | POST   | Register a new user.                               | `UserCreate` schema (email, password) | `UserRead` schema                            |
-| `/auth/login`       | POST   | Login to get JWT tokens.                           | `UserLogin` schema (email, password)  | `Token` schema (access_token, refresh_token) |
-| `/auth/refresh`     | POST   | Refresh an expired access token.                   | `RefreshToken` schema                 | `Token` schema (access_token)                |
-| `/token`            | POST   | OAuth2 compatible token endpoint (form data).      | `username`, `password` (form data)    | `Token` schema (access_token, token_type)    |
-| `/auth/captcha-key` | GET    | Get reCAPTCHA site key (if frontend CAPTCHA used). | None                                  | `{ "captcha_key": "YOUR_SITE_KEY" }`         |
-| `/users/me`         | GET    | Get current authenticated user's details.          | None                                  | `UserRead` schema                            |
+## Authentication System
 
-### Call Management
+### JWT-Based Authentication
 
-| Endpoint                                      | Method | Description                                                  | Path/Query Params                 | Request Body                                 | Response (Success 200)                                       |
-| --------------------------------------------- | ------ | ------------------------------------------------------------ | --------------------------------- | -------------------------------------------- | ------------------------------------------------------------ |
-| `/make-call/{phone_number}/{scenario}`        | GET    | Make an immediate call using a predefined scenario.          | `phone_number`, `scenario` (path) | None                                         | `{ "status": "success", "call_sid": "CA..." }`               |
-| `/make-custom-call/{phone_number}/{id}`       | GET    | Make an immediate call using a user-defined custom scenario. | `phone_number`, `id` (path)       | None                                         | `{ "status": "Custom call initiated", "call_sid": "CA..." }` |
-| `/schedule-call`                              | POST   | Schedule a call for a future time.                           | None                              | `CallScheduleCreate` (phone, scenario, time) | `CallScheduleRead`                                           |
-| `/make-calendar-call-scenario/{phone_number}` | GET    | (Experimental) Make a call informed by Google Calendar data. | `phone_number` (path)             | None                                         | `{ "status": "success", "call_sid": "CA..." }`               |
+All API endpoints require JWT authentication via the `Authorization: Bearer <token>` header.
 
-_Callbacks (primarily for Twilio integration, not direct frontend use):_
-| Endpoint | Method | Description |
-|----------------------------------|-------------|---------------------------------------------------------------------------|
-| `/outgoing-call/{scenario}` | GET, POST | TwiML webhook for handling outgoing call logic (dialing, connecting stream).|
-| `/incoming-call/{scenario}` | GET, POST | TwiML webhook for handling incoming call logic. |
-| `/incoming-call-webhook/{scenario}`| GET, POST | Compatibility TwiML webhook for incoming calls. |
-| `/incoming-custom-call/{scenario_id}`| GET, POST | TwiML webhook for custom scenario incoming calls. |
-| `/handle-user-input` | POST | TwiML webhook for `<Gather>` results (speech input during call). |
-| `/recording-callback` | POST | Twilio webhook: call recording is ready. Initiates transcription. |
-| `/twilio-callback` | POST | Twilio webhook: general call status updates (completed, failed, etc.). |
+#### Register User
 
-### Real-time Media Streaming (WebSockets)
+```http
+POST /auth/register
+Content-Type: application/json
 
-Used internally by the call handling TwiML to connect audio to OpenAI.
-
-| Endpoint                             | Protocol  | Description                                                              |
-| ------------------------------------ | --------- | ------------------------------------------------------------------------ |
-| `/media-stream/{scenario}`           | WebSocket | Streams Twilio call audio to OpenAI and vice-versa for a given scenario. |
-| `/media-stream-custom/{scenario_id}` | WebSocket | Streams audio for custom scenarios.                                      |
-| `/calendar-media-stream`             | WebSocket | Streams audio for calendar-integrated calls.                             |
-
-### Custom Scenarios
-
-| Endpoint                          | Method | Description                | Request Body                      | Response (Success 200/201/204)      |
-| --------------------------------- | ------ | -------------------------- | --------------------------------- | ----------------------------------- |
-| `/realtime/custom-scenario`       | POST   | Create a custom scenario.  | `CustomScenarioCreate` schema     | `CustomScenarioRead` schema         |
-| `/custom-scenarios`               | GET    | List all custom scenarios. | None                              | `List[CustomScenarioRead]`          |
-| `/custom-scenarios/{scenario_id}` | GET    | Get a specific scenario.   | `scenario_id` (path)              | `CustomScenarioRead` schema         |
-| `/custom-scenarios/{scenario_id}` | PUT    | Update a scenario.         | `scenario_id` (path), update data | `CustomScenarioRead` schema         |
-| `/custom-scenarios/{scenario_id}` | DELETE | Delete a scenario.         | `scenario_id` (path)              | `{ "message": "Scenario deleted" }` |
-
-### Enhanced Transcription Services
-
-#### Enhanced Twilio Voice Intelligence Based (Recommended for Frontend)
-
-**Primary Enhanced Endpoints (Recommended for Frontend Use):**
-
-| Endpoint                                           | Method | Description                                                  | Query Params                                                               | Response (Success 200)                                                   |
-| -------------------------------------------------- | ------ | ------------------------------------------------------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `/api/enhanced-transcripts/`                       | GET    | List enhanced transcripts with filtering options             | `skip`, `limit`, `call_direction`, `scenario_name`, `date_from`, `date_to` | Enhanced transcript list with conversation flow metadata                 |
-| `/api/enhanced-transcripts/{transcript_sid}`       | GET    | Get detailed enhanced transcript with full conversation flow | `transcript_sid` (path)                                                    | Complete enhanced transcript with participant info and conversation flow |
-| `/api/enhanced-twilio-transcripts/fetch-and-store` | POST   | Fetch and enhance a specific Twilio transcript               | `{ "transcript_sid": "GT..." }`                                            | Enhanced transcript data with conversation analysis                      |
-| `/api/import-twilio-transcripts`                   | POST   | Import and enhance all available Twilio transcripts          | None                                                                       | Bulk import results with success/failure counts                          |
-
-**Enhanced Transcript Data Structure:**
-
-```json
 {
-  "transcript_sid": "GT...",
+  "email": "user@example.com",
+  "password": "secure_password"
+}
+
+Response:
+{
+  "id": 1,
+  "email": "user@example.com",
+  "is_active": true
+}
+```
+
+#### Login
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secure_password"
+}
+
+Response:
+{
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "token_type": "bearer"
+}
+```
+
+#### Get Current User
+
+```http
+GET /users/me
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "id": 1,
+  "email": "user@example.com",
+  "is_active": true,
+  "is_admin": false
+}
+```
+
+## User-Specific Custom Scenarios
+
+### Overview
+
+Each user can create up to 20 custom scenarios with complete isolation. Users can only see and manage their own scenarios.
+
+### Create Custom Scenario
+
+```http
+POST /realtime/custom-scenario
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "persona": "You are a friendly sales representative for a tech company...",
+  "prompt": "Your goal is to understand the customer's needs and provide solutions...",
+  "voice_type": "aggressive_male",
+  "temperature": 0.7
+}
+
+Response:
+{
+  "scenario_id": "custom_1_1640995200",
+  "message": "Custom scenario created successfully"
+}
+```
+
+### List User's Scenarios
+
+```http
+GET /custom-scenarios
+Authorization: Bearer {access_token}
+
+Response:
+[
+  {
+    "id": 1,
+    "scenario_id": "custom_1_1640995200",
+    "persona": "You are a friendly sales representative...",
+    "prompt": "Your goal is to understand...",
+    "voice_type": "aggressive_male",
+    "temperature": 0.7,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+### Update Scenario
+
+```http
+PUT /custom-scenarios/{scenario_id}
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "persona": "Updated persona...",
+  "prompt": "Updated prompt...",
+  "voice_type": "concerned_female",
+  "temperature": 0.8
+}
+```
+
+### Delete Scenario
+
+```http
+DELETE /custom-scenarios/{scenario_id}
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "message": "Custom scenario deleted successfully"
+}
+```
+
+## Google Calendar Integration
+
+### OAuth Flow Implementation
+
+The Google Calendar integration uses a seamless OAuth flow that redirects back to your frontend.
+
+#### Step 1: Initiate OAuth
+
+```http
+GET /google-calendar/auth
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "authorization_url": "https://accounts.google.com/o/oauth2/auth?..."
+}
+```
+
+#### Step 2: Handle OAuth Callback
+
+After user authorization, Google redirects to the backend, which processes the credentials and redirects to your frontend:
+
+**Success**: `http://localhost:5173/scheduled-meetings?success=true&connected=calendar`
+**Error**: `http://localhost:5173/scheduled-meetings?error=calendar_connection_failed&message=...`
+
+#### Step 3: Frontend OAuth Handling
+
+```typescript
+// Handle OAuth callback parameters
+const [searchParams, setSearchParams] = useSearchParams();
+
+useEffect(() => {
+  const success = searchParams.get("success");
+  const connected = searchParams.get("connected");
+  const error = searchParams.get("error");
+  const message = searchParams.get("message");
+
+  if (success === "true" && connected === "calendar") {
+    toast.success("Google Calendar connected successfully!");
+    setSearchParams({}); // Clean up URL
+  } else if (error) {
+    toast.error(message || "Failed to connect Google Calendar");
+    setSearchParams({}); // Clean up URL
+  }
+}, [searchParams, setSearchParams]);
+```
+
+### Calendar API Endpoints
+
+#### Get Calendar Events
+
+```http
+GET /google-calendar/events?max_results=10
+Authorization: Bearer {access_token}
+
+Response:
+[
+  {
+    "id": "event_id_123",
+    "summary": "Team Meeting",
+    "start": "2024-01-15T14:00:00Z",
+    "end": "2024-01-15T15:00:00Z",
+    "location": "Conference Room A",
+    "description": "Weekly team sync"
+  }
+]
+```
+
+#### Make Calendar-Aware Call
+
+```http
+GET /make-calendar-call-scenario/{phone_number}
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "status": "success",
+  "call_sid": "CA1234567890abcdef",
+  "message": "Calendar call initiated",
+  "phone_number": "+1234567890"
+}
+```
+
+## Call Management
+
+### Make Standard Call
+
+```http
+GET /make-call/{phone_number}/{scenario}
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "status": "success",
+  "call_sid": "CA1234567890abcdef"
+}
+```
+
+### Make Custom Scenario Call
+
+```http
+GET /make-custom-call/{phone_number}/{scenario_id}
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "status": "Custom call initiated",
+  "call_sid": "CA1234567890abcdef"
+}
+```
+
+### Schedule Call
+
+```http
+POST /schedule-call
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "phone_number": "+1234567890",
+  "scenario": "sales",
+  "scheduled_time": "2024-01-15T14:00:00Z"
+}
+```
+
+## Enhanced Transcript System
+
+### Overview
+
+The system provides enhanced transcripts with conversation flow analysis, participant identification, and user-specific isolation.
+
+### List Enhanced Transcripts
+
+```http
+GET /api/enhanced-transcripts/?skip=0&limit=10&call_direction=outbound&scenario_name=sales
+Authorization: Bearer {access_token}
+
+Response:
+[
+  {
+    "id": 1,
+    "transcript_sid": "GT1234567890abcdef",
+    "call_date": "2024-01-15T10:30:00Z",
+    "duration": 180,
+    "call_direction": "outbound",
+    "scenario_name": "sales",
+    "participant_count": 2,
+    "conversation_turns": 27,
+    "total_words": 350,
+    "summary": {
+      "duration_formatted": "3:00",
+      "participant_info": {
+        "0": {"role": "customer", "name": "Customer"},
+        "1": {"role": "agent", "name": "AI Agent"}
+      }
+    }
+  }
+]
+```
+
+### Get Detailed Transcript
+
+```http
+GET /api/enhanced-transcripts/{transcript_sid}
+Authorization: Bearer {access_token}
+
+Response:
+{
+  "transcript_sid": "GT1234567890abcdef",
   "call_date": "2024-01-15T10:30:00Z",
   "duration": 180,
   "call_direction": "outbound",
-  "scenario_name": "default",
+  "scenario_name": "sales",
+  "full_text": "Hello, this is Mike Thompson calling about...",
   "participant_info": {
     "0": {
       "channel": 0,
@@ -287,126 +394,293 @@ Used internally by the call handling TwiML to connect audio to OpenAI.
     "total_sentences": 27,
     "total_words": 350,
     "participant_count": 2,
-    "average_confidence": 0.92,
-    "conversation_stats": {
-      "turns": 27,
-      "avg_words_per_turn": 13,
-      "speaking_time_distribution": {
-        "0": { "percentage": 50, "seconds": 90 },
-        "1": { "percentage": 50, "seconds": 90 }
-      }
-    }
+    "average_confidence": 0.92
   }
 }
 ```
 
-#### Legacy/Direct Twilio Voice Intelligence Access
+## Frontend Integration Examples
 
-1.  **Initiation:**
+### API Client Setup
 
-    - Automatic: When a call is recorded, `/recording-callback` is hit, which (if configured) calls Twilio VI to create a transcript.
-    - Manual:
-      | Endpoint | Method | Description | Request Body | Response (Success 200) |
-      |---------------------------------------------------|--------|-------------------------------------------------|----------------------------------------------|-----------------------------------------------------------------|
-      | `/twilio-transcripts/create-with-media-url` | POST | Create transcript from a public audio URL. | `media_url`, `language_code`, etc. | `{ "status": "success", "transcript_sid": "GT..." }` |
-      | `/twilio-transcripts/create-with-participants` | POST | Create transcript from recording SID & participants. | `recording_sid`, `participants` array | `{ "status": "success", "transcript_sid": "GT..." }` |
+```typescript
+// src/services/apiClient.ts
+import axios from "axios";
 
-2.  **Webhook (from Twilio VI to your app):**
-    | Endpoint | Method | Description |
-    |-----------------------------------------|--------|--------------------------------------------------------------------------------|
-    | `/twilio-transcripts/webhook-callback` | POST | Twilio VI sends notification here when transcript is ready. App stores it with enhancement. |
+const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 10000,
+});
 
-3.  **Legacy Stored Transcripts Access:**
-    | Endpoint | Method | Description | Path/Query Params | Response (Success 200) |
-    |-----------------------------------------|--------|-------------------------------------------------------------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------|
-    | `/stored-transcripts/` | GET | List locally stored transcripts (legacy format). | `skip`, `limit` (query) | `List[TranscriptRecordRead]` (basic format) |
-    | `/stored-transcripts/{transcript_sid}` | GET | Get a specific locally stored transcript by its Twilio Transcript SID. | `transcript_sid` (path) | `TranscriptRecordRead` (basic format) |
-    | `/api/transcripts/{transcript_sid}` | GET | Get detailed locally stored transcript including sentences. | `transcript_sid` (path) | `{ "status": "success", "transcript": { "full_text": "...", "sentences": [...], ...} }` |
+// Automatic token injection
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
-4.  **Direct Twilio VI API Access (Less common for frontend, more for admin/debug):**
-    | Endpoint | Method | Description | Path/Query Params |
-    |---------------------------------------------------|--------|-----------------------------------------------|-----------------------------------|
-    | `/twilio-transcripts/{transcript_sid}` | GET | Fetch transcript directly from Twilio. | `transcript_sid` (path) |
-    | `/twilio-transcripts` | GET | List transcripts directly from Twilio. | `page_size`, `page_token`, etc. |
-    | `/twilio-transcripts/recording/{recording_sid}` | GET | Get transcript from Twilio by recording SID. | `recording_sid` (path) |
-    | `/twilio-transcripts/{transcript_sid}` | DELETE | Delete a transcript from Twilio. | `transcript_sid` (path) |
-
-#### OpenAI Whisper Based (Direct File Upload)
-
-| Endpoint              | Method | Description                                      | Request Body (multipart/form-data) | Response (Success 200)                                |
-| --------------------- | ------ | ------------------------------------------------ | ---------------------------------- | ----------------------------------------------------- |
-| `/whisper/transcribe` | POST   | Transcribe an uploaded audio file using Whisper. | `file` (audio file)                | `{ "status": "success", "transcription": "Text..." }` |
-
-### Google Calendar Integration (Experimental)
-
-Requires user authentication with Google.
-
-| Endpoint                              | Method | Description                                                      |
-| ------------------------------------- | ------ | ---------------------------------------------------------------- |
-| `/google-calendar/auth`               | GET    | Initiates Google OAuth2 flow.                                    |
-| `/google-calendar/callback`           | GET    | Google redirects here after user authorization.                  |
-| `/google-calendar/events`             | GET    | Get upcoming calendar events for the authenticated user.         |
-| `/google-calendar/free-busy`          | POST   | Check free/busy information.                                     |
-| `/google-calendar/revoke`             | POST   | Revoke Google Calendar access for the user.                      |
-| `/google-calendar/credentials-status` | GET    | Check if current user has connected Google Calendar credentials. |
-
-_Calendar-aware call endpoint is listed under Call Management._
-
-### Debug Endpoints (For Development/Admin Use)
-
-| Endpoint                            | Method | Description                                                    |
-| ----------------------------------- | ------ | -------------------------------------------------------------- |
-| `/debug/twilio-intelligence-config` | GET    | Show current Twilio Voice Intelligence config loaded by app.   |
-| `/debug/recent-conversations`       | GET    | List recent conversation records from the database.            |
-| `/debug/recording-callback-status`  | GET    | Check status of recording callbacks and transcript processing. |
-| `/debug/transcript-records`         | GET    | List all transcript records directly from the database.        |
-| `/test-db-connection`               | GET    | Test database connectivity.                                    |
-
-## Enhanced Database Schema
-
-The application now includes enhanced database fields for storing detailed transcript analysis:
-
-### TranscriptRecord Model (Enhanced)
-
-- `call_date`: DateTime of the call
-- `participant_info`: JSON field storing participant details and roles
-- `conversation_flow`: JSON field storing structured conversation with timestamps
-- `media_url`: URL to the original recording (if available)
-- `source_type`: Source of the transcript (e.g., "TwilioIntelligence")
-- `call_direction`: Direction of the call ("inbound" or "outbound")
-- `scenario_name`: Name of the scenario used for the call
-- `summary_data`: JSON field storing conversation statistics and analysis
-
-## Deployment
-
-### Docker
-
-A `Dockerfile` is included for containerization:
-
-```bash
-docker build -t speech-assistant-api .
-docker run -p 5050:5050 --env-file .env speech-assistant-api
+export default apiClient;
 ```
 
-### Production Considerations
+### Authentication Hook
 
-For production deployments:
+```typescript
+// src/hooks/useAuth.ts
+import { useState, useEffect } from "react";
+import apiClient from "../services/apiClient";
 
-1.  Configure a production-ready database (PostgreSQL recommended). Update `DATABASE_URL` in `.env`.
-2.  Set up a reverse proxy (e.g., Nginx, Traefik) to handle incoming traffic, SSL termination, and potentially serve static files if you integrate the frontend build.
-3.  Enable HTTPS with proper SSL certificates.
-4.  Configure `PUBLIC_URL` in `.env` to your production domain name (e.g., `api.yourdomain.com`).
-5.  Ensure `CORSMiddleware` in `app/main.py` includes your production frontend's origin.
-6.  Review and harden security settings (e.g., `SECRET_KEY` should be strong and unique, disable debug mode if Uvicorn runs with it).
-7.  Configure logging for production (e.g., appropriate log levels, centralized logging).
-8.  Set `ENABLE_SECURITY_HEADERS=true` and review CSP and other security header policies in `app/config.py` for your production domain.
+export const useAuth = () => {
+  const [user, setUser] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-## License
+  const login = async (email: string, password: string) => {
+    const response = await apiClient.post("/auth/login", {
+      email,
+      password,
+    });
 
-This project is licensed under the MIT License - see the `LICENSE` file for details (if one exists, otherwise assume standard MIT).
+    localStorage.setItem("token", response.data.access_token);
+    setUser(response.data.user);
+    setIsAuthenticated(true);
 
-## Acknowledgements
+    return response.data;
+  };
 
-- OpenAI for the powerful AI models
-- Twilio for voice and transcription services
-- FastAPI for the excellent API framework
+  const logout = () => {
+    localStorage.removeItem("token");
+    setUser(null);
+    setIsAuthenticated(false);
+  };
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      // Verify token and get user info
+      apiClient
+        .get("/users/me")
+        .then((response) => {
+          setUser(response.data);
+          setIsAuthenticated(true);
+        })
+        .catch(() => {
+          localStorage.removeItem("token");
+        });
+    }
+  }, []);
+
+  return { user, isAuthenticated, login, logout };
+};
+```
+
+### Custom Scenarios Hook
+
+```typescript
+// src/hooks/useScenarios.ts
+import { useState, useEffect } from "react";
+import apiClient from "../services/apiClient";
+
+export const useScenarios = () => {
+  const [scenarios, setScenarios] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadScenarios = async () => {
+    try {
+      const response = await apiClient.get("/custom-scenarios");
+      setScenarios(response.data);
+    } catch (error) {
+      console.error("Failed to load scenarios:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createScenario = async (scenarioData) => {
+    const response = await apiClient.post(
+      "/realtime/custom-scenario",
+      scenarioData
+    );
+    await loadScenarios(); // Refresh list
+    return response.data;
+  };
+
+  const updateScenario = async (scenarioId, scenarioData) => {
+    const response = await apiClient.put(
+      `/custom-scenarios/${scenarioId}`,
+      scenarioData
+    );
+    await loadScenarios(); // Refresh list
+    return response.data;
+  };
+
+  const deleteScenario = async (scenarioId) => {
+    await apiClient.delete(`/custom-scenarios/${scenarioId}`);
+    await loadScenarios(); // Refresh list
+  };
+
+  useEffect(() => {
+    loadScenarios();
+  }, []);
+
+  return {
+    scenarios,
+    loading,
+    createScenario,
+    updateScenario,
+    deleteScenario,
+    refreshScenarios: loadScenarios,
+  };
+};
+```
+
+### Google Calendar Hook
+
+```typescript
+// src/hooks/useGoogleCalendar.ts
+import { useState } from "react";
+import apiClient from "../services/apiClient";
+
+export const useGoogleCalendar = () => {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const initiateOAuth = async () => {
+    const response = await apiClient.get("/google-calendar/auth");
+    window.location.href = response.data.authorization_url;
+  };
+
+  const loadEvents = async () => {
+    setLoading(true);
+    try {
+      const response = await apiClient.get("/google-calendar/events");
+      setEvents(response.data);
+    } catch (error) {
+      console.error("Failed to load calendar events:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const makeCalendarCall = async (phoneNumber) => {
+    const response = await apiClient.get(
+      `/make-calendar-call-scenario/${phoneNumber}`
+    );
+    return response.data;
+  };
+
+  return {
+    events,
+    loading,
+    initiateOAuth,
+    loadEvents,
+    makeCalendarCall,
+  };
+};
+```
+
+## Error Handling
+
+### Standard Error Response Format
+
+```json
+{
+  "detail": "Error message description",
+  "status_code": 400
+}
+```
+
+### Common HTTP Status Codes
+
+- `200`: Success
+- `201`: Created
+- `400`: Bad Request (validation errors)
+- `401`: Unauthorized (invalid/missing token)
+- `403`: Forbidden (insufficient permissions)
+- `404`: Not Found
+- `422`: Validation Error
+- `429`: Rate Limited
+- `500`: Internal Server Error
+
+### Frontend Error Handling
+
+```typescript
+// Error handling wrapper
+const handleApiCall = async (apiCall) => {
+  try {
+    return await apiCall();
+  } catch (error) {
+    if (error.response?.status === 401) {
+      // Token expired, redirect to login
+      logout();
+      navigate("/login");
+    } else if (error.response?.status === 429) {
+      toast.error("Rate limit exceeded. Please try again later.");
+    } else {
+      toast.error(error.response?.data?.detail || "An error occurred");
+    }
+    throw error;
+  }
+};
+```
+
+## WebSocket Connections
+
+### Media Streaming
+
+```typescript
+// WebSocket for real-time audio streaming
+const connectMediaStream = (scenario) => {
+  const ws = new WebSocket(`ws://localhost:5050/media-stream/${scenario}`);
+
+  ws.onopen = () => {
+    console.log("Media stream connected");
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    // Handle audio data
+  };
+
+  return ws;
+};
+```
+
+## Rate Limiting
+
+The API implements rate limiting on sensitive endpoints:
+
+- Authentication: 5 requests per minute
+- Call initiation: 2 requests per minute
+- Scenario creation: 10 requests per minute
+
+## Security Considerations
+
+1. **JWT Tokens**: Store securely, implement refresh logic
+2. **HTTPS**: Use HTTPS in production
+3. **CORS**: Backend configured for frontend origin
+4. **Rate Limiting**: Respect rate limits to avoid blocking
+5. **User Isolation**: All data is automatically filtered by user
+
+## Production Deployment
+
+### Environment Variables
+
+```bash
+# Production backend
+DATABASE_URL=postgresql://user:pass@host:port/db
+PUBLIC_URL=api.yourdomain.com
+FRONTEND_URL=https://yourdomain.com
+
+# Production frontend
+VITE_API_URL=https://api.yourdomain.com
+```
+
+### CORS Configuration
+
+Ensure your production frontend domain is added to the backend's CORS middleware configuration.
+
+This comprehensive guide provides all the information needed to integrate with the Speech Assistant backend API, including authentication, user-specific features, Google Calendar integration, and enhanced transcript management.
