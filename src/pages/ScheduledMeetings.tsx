@@ -12,20 +12,16 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ArrowPathIcon,
+  EyeIcon
 } from '@heroicons/react/24/outline';
 
+// Updated interface to match backend response
 interface CalendarEvent {
   id: string;
   summary: string;
   description?: string;
-  start: {
-    dateTime?: string;
-    date?: string;
-  };
-  end: {
-    dateTime?: string;
-    date?: string;
-  };
+  start: string;  // Direct string from backend
+  end: string;    // Direct string from backend
   attendees?: Array<{
     email: string;
     displayName?: string;
@@ -49,8 +45,26 @@ export const ScheduledMeetings: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<CalendarView>('month');
+  const [showAllEventsModal, setShowAllEventsModal] = useState<{date: Date, events: CalendarEvent[]} | null>(null);
   
   const location = useLocation();
+
+  // Enhanced event click handler
+  const handleEventClick = (event: CalendarEvent, source: string) => {
+    console.log(`🔍 Event clicked from ${source}:`, {
+      id: event.id,
+      summary: event.summary,
+      start: event.start,
+      end: event.end
+    });
+    setSelectedEvent(event);
+    toast.success(`Opening: ${event.summary}`, { duration: 2000 });
+  };
+
+  // Handle showing all events for a day
+  const handleShowAllEvents = (date: Date, events: CalendarEvent[]) => {
+    setShowAllEventsModal({ date, events });
+  };
 
   // Check if we're returning from OAuth callback
   useEffect(() => {
@@ -67,11 +81,20 @@ export const ScheduledMeetings: React.FC = () => {
     }
   }, [location]);
 
+  // Debug selectedEvent changes
+  useEffect(() => {
+    if (selectedEvent) {
+      console.log('🔍 Modal should open for:', selectedEvent.summary);
+    } else {
+      console.log('🔍 Modal closed');
+    }
+  }, [selectedEvent]);
+
   const loadCalendarEvents = async () => {
     try {
       setLoadingEvents(true);
       const events = await api.calendar.getEvents(100);
-      console.log('Calendar events loaded:', events);
+      console.log('Calendar events loaded:', events.length, 'events');
       setCalendarEvents(events || []);
     } catch (error: any) {
       console.error('Error loading calendar events:', error);
@@ -122,7 +145,19 @@ export const ScheduledMeetings: React.FC = () => {
     loadDataWithRetry();
   }, []);
 
-  // Calendar utility functions
+  // Helper functions
+  const isAllDayEvent = (start: string) => {
+    return !start.includes('T');
+  };
+
+  const getEventDate = (start: string) => {
+    if (isAllDayEvent(start)) {
+      return start;
+    } else {
+      return start.split('T')[0];
+    }
+  };
+
   const getDaysInMonth = (date: Date) => {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   };
@@ -133,21 +168,26 @@ export const ScheduledMeetings: React.FC = () => {
 
   const getEventsForDate = (date: Date) => {
     const dateStr = date.toISOString().split('T')[0];
-    return calendarEvents.filter(event => {
-      const eventStart = event.start.dateTime || event.start.date;
-      if (!eventStart) return false;
-      const eventDate = new Date(eventStart).toISOString().split('T')[0];
+    const events = calendarEvents.filter(event => {
+      const eventDate = getEventDate(event.start);
       return eventDate === dateStr;
+    });
+    return events.sort((a, b) => {
+      if (isAllDayEvent(a.start) && !isAllDayEvent(b.start)) return -1;
+      if (!isAllDayEvent(a.start) && isAllDayEvent(b.start)) return 1;
+      return new Date(a.start).getTime() - new Date(b.start).getTime();
     });
   };
 
-  const navigateMonth = (direction: 'prev' | 'next') => {
+  const navigateDate = (direction: 'prev' | 'next') => {
     setCurrentDate(prev => {
       const newDate = new Date(prev);
-      if (direction === 'prev') {
-        newDate.setMonth(newDate.getMonth() - 1);
-      } else {
-        newDate.setMonth(newDate.getMonth() + 1);
+      if (view === 'month') {
+        newDate.setMonth(newDate.getMonth() + (direction === 'next' ? 1 : -1));
+      } else if (view === 'week') {
+        newDate.setDate(newDate.getDate() + (direction === 'next' ? 7 : -7));
+      } else if (view === 'day') {
+        newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
       }
       return newDate;
     });
@@ -157,15 +197,16 @@ export const ScheduledMeetings: React.FC = () => {
     setCurrentDate(new Date());
   };
 
+  const goToJune2025 = () => {
+    setCurrentDate(new Date(2025, 5, 1));
+  };
+
   const formatEventTime = (event: CalendarEvent) => {
-    const startTime = event.start.dateTime || event.start.date;
-    if (!startTime) return '';
-    
-    const date = new Date(startTime);
-    if (event.start.dateTime) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (isAllDayEvent(event.start)) {
+      return 'All day';
     }
-    return 'All day';
+    const date = new Date(event.start);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   const isToday = (date: Date) => {
@@ -173,8 +214,173 @@ export const ScheduledMeetings: React.FC = () => {
     return date.toDateString() === today.toDateString();
   };
 
-  // Render calendar grid
-  const renderCalendarGrid = () => {
+  const getViewTitle = () => {
+    if (view === 'month') {
+      return currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } else if (view === 'week') {
+      const startOfWeek = new Date(currentDate);
+      startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      return `${startOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endOfWeek.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    } else {
+      return currentDate.toLocaleDateString('en-US', { 
+        weekday: 'long', 
+        month: 'long', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+    }
+  };
+
+  // Day View Component
+  const DayView = () => {
+    const events = getEventsForDate(currentDate);
+    const hours = Array.from({ length: 24 }, (_, i) => i);
+
+    return (
+      <div className="flex flex-col h-[600px]">
+        <div className="text-center py-4 border-b bg-white dark:bg-gray-900">
+          <h3 className="text-lg font-semibold">
+            {currentDate.toLocaleDateString('en-US', { 
+              weekday: 'long', 
+              month: 'long', 
+              day: 'numeric' 
+            })}
+          </h3>
+          <p className="text-sm text-gray-500">{events.length} events</p>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto">
+          {/* All-day events */}
+          {events.filter(e => isAllDayEvent(e.start)).length > 0 && (
+            <div className="p-4 border-b bg-gray-50 dark:bg-gray-800">
+              <h4 className="font-medium mb-2">All Day</h4>
+              <div className="space-y-2">
+                {events.filter(e => isAllDayEvent(e.start)).map(event => (
+                  <button
+                    key={event.id}
+                    onClick={() => handleEventClick(event, 'day-view-all-day')}
+                    className="w-full text-left p-3 bg-green-500 hover:bg-green-600 text-white rounded transition-colors"
+                  >
+                    <div className="font-medium">{event.summary}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Hourly time slots with sticky time column */}
+          <div className="relative">
+            {hours.map(hour => {
+              const hourEvents = events.filter(event => {
+                if (isAllDayEvent(event.start)) return false;
+                const eventHour = new Date(event.start).getHours();
+                return eventHour === hour;
+              });
+
+              return (
+                <div key={hour} className="flex border-b border-gray-200 dark:border-gray-700">
+                  {/* Time column - simple, no sticky positioning */}
+                  <div className="w-20 p-2 text-sm text-gray-500 bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex-shrink-0">
+                    {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
+                  </div>
+                  {/* Events column */}
+                  <div className="flex-1 min-h-[60px] p-2">
+                    {hourEvents.map(event => (
+                      <button
+                        key={event.id}
+                        onClick={() => handleEventClick(event, `day-view-${hour}h`)}
+                        className="w-full text-left p-2 mb-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm transition-colors"
+                      >
+                        <div className="font-medium">{formatEventTime(event)}</div>
+                        <div>{event.summary}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Week View Component
+  const WeekView = () => {
+    const startOfWeek = new Date(currentDate);
+    startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
+    
+    const weekDays = Array.from({ length: 7 }, (_, i) => {
+      const day = new Date(startOfWeek);
+      day.setDate(startOfWeek.getDate() + i);
+      return day;
+    });
+
+    return (
+      <div className="h-full">
+        {/* Week header */}
+        <div className="grid grid-cols-8 border-b">
+          <div className="p-2"></div>
+          {weekDays.map(day => (
+            <div key={day.toISOString()} className={`p-2 text-center border-l ${
+              isToday(day) ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+            }`}>
+              <div className="text-sm font-medium">
+                {day.toLocaleDateString('en-US', { weekday: 'short' })}
+              </div>
+              <div className={`text-lg ${isToday(day) ? 'text-blue-600 font-bold' : ''}`}>
+                {day.getDate()}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Week grid */}
+        <div className="flex-1 overflow-y-auto">
+          {Array.from({ length: 24 }, (_, hour) => (
+            <div key={hour} className="grid grid-cols-8 border-b border-gray-200 dark:border-gray-700">
+              <div className="p-2 text-sm text-gray-500 bg-gray-50 dark:bg-gray-800 border-r">
+                {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
+              </div>
+              {weekDays.map(day => {
+                const dayEvents = getEventsForDate(day).filter(event => {
+                  if (isAllDayEvent(event.start)) return hour === 0; // Show all-day events in first hour
+                  const eventHour = new Date(event.start).getHours();
+                  return eventHour === hour;
+                });
+
+                return (
+                  <div key={`${day.toISOString()}-${hour}`} className="min-h-[50px] p-1 border-l border-gray-200 dark:border-gray-700">
+                    {dayEvents.map(event => (
+                      <button
+                        key={event.id}
+                        onClick={() => handleEventClick(event, `week-view-${day.getDate()}-${hour}h`)}
+                        className={`w-full text-left p-1 mb-1 rounded text-xs transition-colors ${
+                          isAllDayEvent(event.start)
+                            ? 'bg-green-500 hover:bg-green-600 text-white'
+                            : 'bg-blue-500 hover:bg-blue-600 text-white'
+                        }`}
+                      >
+                        <div className="truncate font-medium">
+                          {isAllDayEvent(event.start) ? 'All day' : formatEventTime(event)}
+                        </div>
+                        <div className="truncate">{event.summary}</div>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Month View Component (Enhanced)
+  const MonthView = () => {
     const daysInMonth = getDaysInMonth(currentDate);
     const firstDay = getFirstDayOfMonth(currentDate);
     const daysArray = [];
@@ -186,19 +392,22 @@ export const ScheduledMeetings: React.FC = () => {
       daysArray.push(
         <div key={`prev-${i}`} className="h-32 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-1">
           <div className="text-sm text-gray-400 mb-1">{prevDate.getDate()}</div>
-          <div className="space-y-1">
-            {events.slice(0, 2).map(event => (
-              <div
+          <div className="space-y-1 overflow-y-auto max-h-24">
+            {events.slice(0, 3).map(event => (
+              <button
                 key={event.id}
-                className="text-xs p-1 bg-gray-300 dark:bg-gray-600 rounded cursor-pointer hover:bg-gray-400 dark:hover:bg-gray-500 truncate"
-                onClick={() => setSelectedEvent(event)}
-                title={event.summary}
+                onClick={() => handleEventClick(event, `prev-month-${prevDate.getDate()}`)}
+                className={`w-full text-left text-xs p-1 rounded transition-colors ${
+                  isAllDayEvent(event.start)
+                    ? 'bg-green-400 hover:bg-green-500 text-white'
+                    : 'bg-blue-400 hover:bg-blue-500 text-white'
+                }`}
               >
-                {event.summary}
-              </div>
+                <div className="truncate">{event.summary}</div>
+              </button>
             ))}
-            {events.length > 2 && (
-              <div className="text-xs text-gray-500">+{events.length - 2} more</div>
+            {events.length > 3 && (
+              <div className="text-xs text-gray-500 p-1">+{events.length - 3} more</div>
             )}
           </div>
         </div>
@@ -217,36 +426,45 @@ export const ScheduledMeetings: React.FC = () => {
           className={`h-32 border border-gray-200 dark:border-gray-700 p-1 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${
             isCurrentDay ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-white dark:bg-gray-900'
           }`}
+          onClick={() => {
+            setCurrentDate(date);
+            setView('day');
+          }}
         >
-          <div className={`text-sm mb-1 ${
+          <div className={`text-sm mb-1 font-medium flex justify-between items-center ${
             isCurrentDay 
-              ? 'font-bold text-blue-600 dark:text-blue-400' 
+              ? 'text-blue-600 dark:text-blue-400' 
               : 'text-gray-900 dark:text-gray-100'
           }`}>
-            {day}
+            <span>{day}</span>
+            {events.length > 0 && (
+              <span className="text-xs bg-blue-500 text-white px-1 rounded">
+                {events.length}
+              </span>
+            )}
           </div>
-          <div className="space-y-1">
-            {events.slice(0, 3).map(event => (
-              <div
+          
+          <div className="space-y-1 overflow-y-auto max-h-20">
+            {events.slice(0, 3).map((event) => (
+              <button
                 key={event.id}
-                className="text-xs p-1 bg-blue-500 text-white rounded cursor-pointer hover:bg-blue-600 truncate"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedEvent(event);
+                  handleEventClick(event, `month-day-${day}`);
                 }}
-                title={`${formatEventTime(event)} ${event.summary}`}
+                className={`w-full text-left text-xs p-1 rounded transition-colors ${
+                  isAllDayEvent(event.start)
+                    ? 'bg-green-500 hover:bg-green-600 text-white'
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                }`}
               >
-                <div className="flex items-center space-x-1">
-                  <span className="font-medium">{formatEventTime(event)}</span>
-                  <span className="truncate">{event.summary}</span>
-                </div>
-              </div>
+                <div className="truncate font-medium">{formatEventTime(event)}</div>
+                <div className="truncate">{event.summary}</div>
+              </button>
             ))}
+            
             {events.length > 3 && (
-              <div className="text-xs text-gray-500 cursor-pointer" onClick={() => {
-                // Show all events for this day
-                toast.success(`${events.length} events on ${date.toLocaleDateString()}`);
-              }}>
+              <div className="text-xs text-gray-500 p-1 text-center">
                 +{events.length - 3} more
               </div>
             )}
@@ -256,33 +474,52 @@ export const ScheduledMeetings: React.FC = () => {
     }
 
     // Add days from next month to fill the grid
-    const remainingCells = 42 - daysArray.length; // 6 rows * 7 days
+    const remainingCells = 42 - daysArray.length;
     for (let i = 1; i <= remainingCells; i++) {
       const nextDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i);
       const events = getEventsForDate(nextDate);
       daysArray.push(
         <div key={`next-${i}`} className="h-32 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-1">
           <div className="text-sm text-gray-400 mb-1">{nextDate.getDate()}</div>
-          <div className="space-y-1">
-            {events.slice(0, 2).map(event => (
-              <div
+          <div className="space-y-1 overflow-y-auto max-h-24">
+            {events.slice(0, 3).map(event => (
+              <button
                 key={event.id}
-                className="text-xs p-1 bg-gray-300 dark:bg-gray-600 rounded cursor-pointer hover:bg-gray-400 dark:hover:bg-gray-500 truncate"
-                onClick={() => setSelectedEvent(event)}
-                title={event.summary}
+                onClick={() => handleEventClick(event, `next-month-${nextDate.getDate()}`)}
+                className={`w-full text-left text-xs p-1 rounded transition-colors ${
+                  isAllDayEvent(event.start)
+                    ? 'bg-green-400 hover:bg-green-500 text-white'
+                    : 'bg-blue-400 hover:bg-blue-500 text-white'
+                }`}
               >
-                {event.summary}
-              </div>
+                <div className="truncate">{event.summary}</div>
+              </button>
             ))}
-            {events.length > 2 && (
-              <div className="text-xs text-gray-500">+{events.length - 2} more</div>
+            {events.length > 3 && (
+              <div className="text-xs text-gray-500 p-1">+{events.length - 3} more</div>
             )}
           </div>
         </div>
       );
     }
 
-    return daysArray;
+    return (
+      <div className="h-full">
+        {/* Days of week header */}
+        <div className="grid grid-cols-7 gap-0 mb-2">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+            <div key={day} className="p-2 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
+              {day}
+            </div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div className="grid grid-cols-7 gap-0 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          {daysArray}
+        </div>
+      </div>
+    );
   };
 
   if (loadingEvents) {
@@ -340,6 +577,12 @@ export const ScheduledMeetings: React.FC = () => {
             >
               Today
             </button>
+            <button
+              onClick={goToJune2025}
+              className="px-3 py-1 text-sm border border-blue-300 dark:border-blue-600 rounded hover:bg-blue-50 dark:hover:bg-blue-800 transition-colors text-blue-600 dark:text-blue-400"
+            >
+              June 2025 (Events)
+            </button>
           </div>
           
           <div className="flex items-center space-x-2">
@@ -363,13 +606,13 @@ export const ScheduledMeetings: React.FC = () => {
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-1">
               <button
-                onClick={() => navigateMonth('prev')}
+                onClick={() => navigateDate('prev')}
                 className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
               >
                 <ChevronLeftIcon className="h-5 w-5" />
               </button>
               <button
-                onClick={() => navigateMonth('next')}
+                onClick={() => navigateDate('next')}
                 className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
               >
                 <ChevronRightIcon className="h-5 w-5" />
@@ -377,11 +620,12 @@ export const ScheduledMeetings: React.FC = () => {
             </div>
             
             <h2 className="text-xl font-semibold text-text-light dark:text-text-dark">
-              {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              {getViewTitle()}
             </h2>
           </div>
 
           <div className="flex items-center space-x-2">
+            {/* View Toggle */}
             <div className="flex border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
               {(['month', 'week', 'day'] as CalendarView[]).map((viewType) => (
                 <button
@@ -396,107 +640,116 @@ export const ScheduledMeetings: React.FC = () => {
                   {viewType}
                 </button>
               ))}
-            </div>
-          </div>
-        </div>
-      </div>
+                      </div>
+                      
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              {calendarEvents.length} events
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
-      {/* Calendar Grid */}
-      <div className="p-6">
-        {/* Days of week header */}
-        <div className="grid grid-cols-7 gap-0 mb-2">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-            <div key={day} className="p-2 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
-              {day}
-            </div>
-          ))}
-        </div>
-
-        {/* Calendar grid */}
-        <div className="grid grid-cols-7 gap-0 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-          {renderCalendarGrid()}
-        </div>
-
-        {/* Event count */}
-        <div className="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
-          Showing {calendarEvents.length} events
-        </div>
+      {/* Calendar Content */}
+      <div className="flex-1 p-6">
+        {view === 'month' && <MonthView />}
+        {view === 'week' && <WeekView />}
+        {view === 'day' && <DayView />}
       </div>
 
       {/* Event Detail Modal */}
       {selectedEvent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto">
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+          onClick={() => {
+            console.log('🔍 Modal backdrop clicked, closing modal');
+            setSelectedEvent(null);
+          }}
+        >
+          <div 
+            className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex justify-between items-start mb-4">
-              <h3 className="text-lg font-semibold text-text-light dark:text-text-dark">
+              <h3 className="text-xl font-bold text-text-light dark:text-text-dark">
                 {selectedEvent.summary}
-              </h3>
+            </h3>
               <button
-                onClick={() => setSelectedEvent(null)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                onClick={() => {
+                  console.log('🔍 Close button clicked');
+                  setSelectedEvent(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-2xl px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
               >
                 ✕
               </button>
             </div>
             
-            <div className="space-y-3">
-              <div className="flex items-center space-x-2 text-sm">
-                <ClockIcon className="h-4 w-4 text-gray-500" />
-                <span>
-                  {new Date(selectedEvent.start.dateTime || selectedEvent.start.date || '').toLocaleDateString()} 
-                  {selectedEvent.start.dateTime && (
-                    <span className="ml-1">
-                      {formatEventTime(selectedEvent)} - {
-                        new Date(selectedEvent.end.dateTime || selectedEvent.end.date || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                      }
-                    </span>
-                  )}
+            <div className="space-y-4">
+              <div className="flex items-center space-x-3 text-sm bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                <ClockIcon className="h-5 w-5 text-gray-500" />
+                <div>
+                  <div className="font-medium">
+                    {new Date(selectedEvent.start).toLocaleDateString('en-US', { 
+                      weekday: 'long', 
+                      year: 'numeric', 
+                      month: 'long', 
+                      day: 'numeric' 
+                    })}
+                  </div>
+                  <div className="text-gray-600 dark:text-gray-400">
+                    {!isAllDayEvent(selectedEvent.start) ? (
+                      `${formatEventTime(selectedEvent)} - ${
+                        new Date(selectedEvent.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      }`
+                    ) : (
+                      <span className="text-green-600 font-medium">All Day Event</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3 text-sm">
+                <span className="text-gray-500">🆔</span>
+                <span className="font-mono text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                  {selectedEvent.id}
                 </span>
               </div>
 
-              {selectedEvent.attendees && selectedEvent.attendees.length > 0 && (
-                <div className="flex items-center space-x-2 text-sm">
-                  <UserGroupIcon className="h-4 w-4 text-gray-500" />
-                  <span>{selectedEvent.attendees.length} attendees</span>
-                </div>
-              )}
-
-              {selectedEvent.location && (
-                <div className="flex items-center space-x-2 text-sm">
+              {selectedEvent.location && selectedEvent.location !== '' && (
+                <div className="flex items-center space-x-3 text-sm">
                   <span className="text-gray-500">📍</span>
                   <span>{selectedEvent.location}</span>
                 </div>
               )}
 
-              {selectedEvent.description && (
+              {selectedEvent.description && selectedEvent.description !== '' && (
                 <div className="text-sm">
-                  <strong>Description:</strong>
-                  <p className="mt-1 text-gray-600 dark:text-gray-400">{selectedEvent.description}</p>
+                  <strong className="block mb-2">Description:</strong>
+                  <p className="text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                    {selectedEvent.description}
+                  </p>
                 </div>
               )}
 
-              <div className="flex space-x-3 pt-4">
-                {selectedEvent.htmlLink && (
-                  <a
-                    href={selectedEvent.htmlLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center space-x-1 text-sm text-accent hover:text-accent-dark"
-                  >
-                    <LinkIcon className="h-4 w-4" />
-                    <span>Open in Google Calendar</span>
-                  </a>
-                )}
-                
+              <div className="flex space-x-3 pt-4 border-t border-gray-200 dark:border-gray-600">
                 <button
                   onClick={() => {
-                    // You can implement scheduling logic here
-                    toast.success('AI call scheduling coming soon!');
+                    toast.success('AI call scheduling will be implemented soon!');
                   }}
-                  className="flex items-center space-x-1 text-sm text-accent hover:text-accent-dark"
+                  className="flex items-center space-x-2 text-sm text-white bg-accent hover:bg-accent-dark px-4 py-2 rounded-lg transition-colors"
                 >
                   <PhoneIcon className="h-4 w-4" />
                   <span>Schedule AI Call</span>
+                </button>
+                
+                <button
+                  onClick={() => {
+                    console.log('🔍 Full event object:', selectedEvent);
+                    toast.success('Event details logged to console');
+                  }}
+                  className="flex items-center space-x-2 text-sm text-gray-600 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
+                >
+                  🔍 <span>Debug Info</span>
                 </button>
               </div>
             </div>
