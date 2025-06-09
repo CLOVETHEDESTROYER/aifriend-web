@@ -3,11 +3,18 @@ import { PageContainer } from '../components/Layout/PageContainer';
 import api, { TranscriptRecord, EnhancedTranscriptListItem, EnhancedTranscriptRecord, TwilioTranscriptResponse } from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 import { ArrowPathIcon, MagnifyingGlassIcon, PhoneArrowUpRightIcon, PhoneArrowDownLeftIcon } from '@heroicons/react/24/outline';
+import axios from 'axios';
+import { useAuth } from '../hooks/useAuth';
 
 const ITEMS_PER_PAGE = 10;
 
 // Transform Twilio transcript data to our enhanced format
-const transformTwilioToEnhanced = (twilioData: TwilioTranscriptResponse): EnhancedTranscriptRecord => {
+const transformTwilioToEnhanced = (twilioData: TwilioTranscriptResponse, sourceType: string = 'Twilio'): EnhancedTranscriptRecord => {
+  // Validate that we have the required Twilio format
+  if (!twilioData.sentences || !Array.isArray(twilioData.sentences)) {
+    throw new Error('Invalid Twilio format: missing sentences array');
+  }
+
   // Calculate participant info
   const speakerStats = twilioData.sentences.reduce((acc, sentence) => {
     const speaker = sentence.speaker.toString();
@@ -77,13 +84,48 @@ const transformTwilioToEnhanced = (twilioData: TwilioTranscriptResponse): Enhanc
         }, {} as any)
       }
     },
-    source_type: 'Twilio',
+    source_type: sourceType, // Now tracks the actual source
     status: twilioData.status,
     full_text: twilioData.sentences.map(s => s.text).join(' '),
     date_created: twilioData.date_created,
     date_updated: twilioData.date_updated,
     language_code: twilioData.language_code,
     created_at: twilioData.date_created
+  };
+};
+
+// Transform Twilio format to list item format
+const transformTwilioToListItem = (twilioData: TwilioTranscriptResponse, sourceType: string = 'Twilio'): EnhancedTranscriptListItem => {
+  // List endpoints don't have sentences - this is normal Twilio API behavior!
+  if (!twilioData.sentences || !Array.isArray(twilioData.sentences)) {
+    // This is expected for list endpoints - just use metadata
+    return {
+      transcript_sid: twilioData.sid,
+      call_date: twilioData.date_created,
+      duration: twilioData.duration || 0,
+      call_direction: 'outbound',
+      scenario_name: `${sourceType} Call`,
+      status: twilioData.status,
+      participant_count: 2,
+      total_words: 0, // Will be calculated when detail is loaded
+      average_confidence: 0.85
+    };
+  }
+
+  const totalWords = twilioData.sentences.reduce((sum, s) => sum + s.text.split(' ').length, 0);
+  const avgConfidence = twilioData.sentences.reduce((sum, s) => sum + s.confidence, 0) / twilioData.sentences.length;
+  const speakerCount = new Set(twilioData.sentences.map(s => s.speaker)).size;
+
+  return {
+    transcript_sid: twilioData.sid,
+    call_date: twilioData.date_created,
+    duration: twilioData.duration || 0,
+    call_direction: 'outbound', // Default
+    scenario_name: `${sourceType} Call`, // Indicates source
+    status: twilioData.status,
+    participant_count: speakerCount || 2,
+    total_words: totalWords,
+    average_confidence: avgConfidence || 0.85
   };
 };
 
@@ -102,6 +144,12 @@ export const CallNotes: React.FC = () => {
     scenario_name?: string;
   }>({});
   const [debugInfo, setDebugInfo] = useState<string>('');
+  
+  // Get authentication status
+  const { isAuthenticated, token, user } = useAuth();
+  
+  // Check localStorage token as well
+  const localStorageToken = localStorage.getItem('token');
 
   // Add some test data for debugging
   const testTranscripts: EnhancedTranscriptListItem[] = [
@@ -149,37 +197,87 @@ export const CallNotes: React.FC = () => {
     const skip = page * ITEMS_PER_PAGE;
     
     try {
-      // Try Twilio transcripts first
-      console.log('Attempting to fetch Twilio transcripts...');
-      setDebugInfo('Trying Twilio transcripts...');
-      const twilioData = await api.calls.getTwilioTranscripts(skip, ITEMS_PER_PAGE);
+      // Try STORED transcripts FIRST - use the working endpoint from backend logs
+      console.log('🔍 Attempting to fetch stored transcripts from /stored-transcripts/...');
+      setDebugInfo('Trying stored transcripts (/stored-transcripts/)...');
       
-      // Transform Twilio list data to enhanced format
-      const convertedData = twilioData.transcripts ? twilioData.transcripts.map((transcript: any) => ({
-        transcript_sid: transcript.sid,
-        call_date: transcript.date_created,
-        duration: transcript.duration || 0,
-        call_direction: 'outbound', // Default
-        scenario_name: 'Voice Call', // Default
-        status: transcript.status,
-        participant_count: 2, // Default assumption
-        total_words: transcript.sentences ? transcript.sentences.reduce((sum: number, s: any) => sum + s.text.split(' ').length, 0) : 0,
-        average_confidence: transcript.sentences ? transcript.sentences.reduce((sum: number, s: any) => sum + s.confidence, 0) / transcript.sentences.length : 0.85
-      })) : [];
+      const storedResponse = await api.calls.getStoredTwilioTranscripts(skip, ITEMS_PER_PAGE);
+      console.log('📦 Raw stored response:', storedResponse);
       
-      if (page === 0) {
-        setTranscripts(convertedData);
-      } else {
-        setTranscripts(prev => [...prev, ...convertedData]);
+      // Check if we got stored transcripts
+      if (storedResponse.transcripts && Array.isArray(storedResponse.transcripts) && storedResponse.transcripts.length > 0) {
+        // Transform stored data - they might be in legacy format, so handle both
+        const convertedData = storedResponse.transcripts.map((transcript: any) => {
+          // If it has sentences (Twilio format), use the proper transformer
+          if (transcript.sentences && Array.isArray(transcript.sentences)) {
+            return transformTwilioToListItem(transcript as TwilioTranscriptResponse, 'Stored');
+          } else {
+            // Legacy format - create basic list item
+            return {
+              transcript_sid: transcript.transcript_sid || transcript.sid,
+              call_date: transcript.date_created,
+              duration: transcript.duration || 0,
+              call_direction: 'outbound',
+              scenario_name: 'Stored Call',
+              status: transcript.status,
+              participant_count: 2,
+              total_words: transcript.full_text ? transcript.full_text.split(' ').length : 0,
+              average_confidence: 0.85
+            } as EnhancedTranscriptListItem;
+          }
+        });
+        
+        if (page === 0) {
+          setTranscripts(convertedData);
+        } else {
+          setTranscripts(prev => [...prev, ...convertedData]);
+        }
+        
+        setHasMore(convertedData.length === ITEMS_PER_PAGE);
+        setCurrentPage(page);
+        setDebugInfo(`✅ Stored transcripts loaded: ${convertedData.length} items`);
+        console.log('✅ Stored transcripts processed successfully:', convertedData.length, 'items');
+        toast.success(`Loaded ${convertedData.length} stored transcripts`);
+        return; // Success! No need to try other endpoints
       }
       
-      setHasMore(convertedData.length === ITEMS_PER_PAGE);
-      setCurrentPage(page);
-      setDebugInfo(`Twilio transcripts loaded: ${convertedData.length} items`);
-      console.log('Twilio transcripts loaded successfully:', convertedData.length, 'items');
+      console.log('📭 No stored transcripts found, trying Twilio API...');
+      setDebugInfo('No stored data, trying Twilio API...');
+      
+      // Fallback to live Twilio API
+      const twilioResponse = await api.calls.getTwilioTranscripts(skip, ITEMS_PER_PAGE);
+      console.log('📡 Raw Twilio response:', twilioResponse);
+      
+      if (twilioResponse.transcripts && Array.isArray(twilioResponse.transcripts)) {
+        const twilioConvertedData = twilioResponse.transcripts.map((transcript: TwilioTranscriptResponse) => 
+          transformTwilioToListItem(transcript, 'Twilio API')
+        );
+        
+        if (page === 0) {
+          setTranscripts(twilioConvertedData);
+        } else {
+          setTranscripts(prev => [...prev, ...twilioConvertedData]);
+        }
+        
+        setHasMore(twilioConvertedData.length === ITEMS_PER_PAGE);
+        setCurrentPage(page);
+        setDebugInfo(`✅ Twilio API transcripts loaded: ${twilioConvertedData.length} items`);
+        console.log('✅ Twilio API transcripts processed successfully:', twilioConvertedData.length, 'items');
+        toast.success(`Loaded ${twilioConvertedData.length} transcripts from Twilio API`);
+        return;
+      }
+
     } catch (err) {
-      console.log('Twilio transcripts failed, trying enhanced endpoint...', err);
-      setDebugInfo('Twilio failed, trying enhanced...');
+      // Check for authentication errors specifically
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        console.log('🔐 Authentication required for stored transcripts');
+        setDebugInfo('Authentication required - please login');
+        toast.error('Please login to access stored transcripts');
+        setError('Authentication required');
+      } else {
+        console.log('❌ Both stored and Twilio transcripts failed, trying enhanced endpoint...', err);
+        setDebugInfo('Stored & Twilio failed, trying enhanced...');
+      }
       
       // Fallback to enhanced transcripts
       try {
@@ -193,16 +291,17 @@ export const CallNotes: React.FC = () => {
         
         setHasMore(data.length === ITEMS_PER_PAGE);
         setCurrentPage(page);
-        setDebugInfo(`Enhanced transcripts loaded: ${data.length} items`);
-        console.log('Enhanced transcripts loaded successfully:', data.length, 'items');
+        setDebugInfo(`✅ Enhanced transcripts loaded: ${data.length} items`);
+        console.log('✅ Enhanced transcripts loaded successfully:', data.length, 'items');
+        toast.success(`Loaded ${data.length} enhanced transcripts`);
       } catch (enhancedErr) {
-        console.log('Enhanced transcripts failed, trying legacy endpoint...', enhancedErr);
+        console.log('❌ Enhanced transcripts failed, trying legacy endpoint...', enhancedErr);
         setDebugInfo('Enhanced failed, trying legacy...');
         
         // Fallback to legacy transcripts
         try {
           const legacyData = await api.calls.getTranscripts(skip, ITEMS_PER_PAGE);
-          console.log('Legacy transcripts loaded:', legacyData.length, 'items');
+          console.log('📜 Legacy transcripts loaded:', legacyData.length, 'items');
           
           // Convert legacy data to enhanced format for display
           const convertedData = legacyData.map(transcript => ({
@@ -225,10 +324,10 @@ export const CallNotes: React.FC = () => {
           
           setHasMore(legacyData.length === ITEMS_PER_PAGE);
           setCurrentPage(page);
-          setDebugInfo(`Legacy transcripts loaded: ${legacyData.length} items`);
+          setDebugInfo(`✅ Legacy transcripts loaded: ${legacyData.length} items`);
           toast.success('Loaded legacy transcript data');
         } catch (legacyErr) {
-          console.error('All transcript fetch methods failed:', legacyErr);
+          console.error('❌ All transcript fetch methods failed:', legacyErr);
           setDebugInfo('All API calls failed, using test data');
           
           // Use test data as final fallback
@@ -249,107 +348,144 @@ export const CallNotes: React.FC = () => {
     setIsLoadingTranscript(true);
     setSelectedTranscript(null);
     setError(null);
+    
     try {
-      console.log('Attempting to fetch Twilio transcript details for:', transcriptSid);
-      const twilioData = await api.calls.getTwilioTranscriptById(transcriptSid);
+      // Try STORED transcript details FIRST - use working endpoint from backend logs
+      console.log('🔍 Attempting to fetch stored transcript details from /stored-transcripts/ for:', transcriptSid);
       
-      // Log the actual data structure to understand what we're getting
-      console.log('Raw Twilio transcript data:', JSON.stringify(twilioData, null, 2));
+      const storedData = await api.calls.getStoredTwilioTranscriptById(transcriptSid);
+      console.log('📦 Raw stored transcript data:', JSON.stringify(storedData, null, 2));
       
-      // Transform Twilio data to enhanced format
-      const enhancedData = transformTwilioToEnhanced(twilioData);
-      console.log('Transformed enhanced data:', enhancedData);
-      
-      setSelectedTranscript(enhancedData);
-      console.log('Twilio transcript details loaded and transformed successfully');
-    } catch (err) {
-      console.log('Twilio transcript details failed, trying enhanced endpoint...', err);
-      
-      // Fallback to enhanced transcript details
-      try {
-        const data = await api.calls.getEnhancedTranscriptById(transcriptSid);
-        setSelectedTranscript(data);
-        toast.success('Loaded enhanced transcript details');
-      } catch (enhancedErr) {
-        console.log('Enhanced transcript details failed, trying legacy endpoint...', err);
+      // The API client now handles transformation to Twilio format
+      // Validate that we got proper Twilio format (should have sentences)
+      if (storedData.sentences && Array.isArray(storedData.sentences)) {
+        const enhancedData = transformTwilioToEnhanced(storedData, 'Stored');
+        console.log('✅ Transformed stored data to enhanced format:', enhancedData);
         
-        // Fallback to legacy transcript details
+        setSelectedTranscript(enhancedData);
+        console.log('✅ Stored transcript details loaded and transformed successfully');
+        toast.success('Loaded stored transcript details');
+        return; // Success! No need to try other endpoints
+      } else {
+        console.warn('⚠️ Stored transcript missing sentences array after transformation:', storedData);
+        // Don't throw error, just fall through to try other endpoints
+      }
+      
+    } catch (storedErr) {
+      // Check for authentication errors specifically
+      if (axios.isAxiosError(storedErr) && storedErr.response?.status === 401) {
+        console.log('🔐 Authentication required for stored transcript details');
+        toast.error('Please login to access stored transcripts');
+        setError('Authentication required');
+        return;
+      } else if (axios.isAxiosError(storedErr) && storedErr.response?.status === 404) {
+        console.log('📭 Stored transcript not found, trying Twilio API...');
+      } else {
+        console.log('❌ Stored transcript details failed, trying Twilio API...', storedErr);
+      }
+      
+      try {
+        // Fallback to live Twilio API
+        console.log('🔍 Attempting to fetch Twilio transcript details for:', transcriptSid);
+        const twilioData = await api.calls.getTwilioTranscriptById(transcriptSid);
+        console.log('📡 Raw Twilio transcript data:', JSON.stringify(twilioData, null, 2));
+        
+        // Transform Twilio data to enhanced format
+        const enhancedData = transformTwilioToEnhanced(twilioData, 'Twilio API');
+        console.log('✅ Transformed Twilio data to enhanced format:', enhancedData);
+        
+        setSelectedTranscript(enhancedData);
+        console.log('✅ Twilio transcript details loaded and transformed successfully');
+        toast.success('Loaded transcript details from Twilio API');
+      } catch (twilioErr) {
+        console.log('❌ Twilio transcript details failed, trying enhanced endpoint...', twilioErr);
+        
+        // Fallback to enhanced transcript details
         try {
-          const legacyData = await api.calls.getTranscriptById(transcriptSid);
-          console.log('Legacy transcript details loaded:', legacyData);
+          const data = await api.calls.getEnhancedTranscriptById(transcriptSid);
+          setSelectedTranscript(data);
+          toast.success('Loaded enhanced transcript details');
+        } catch (enhancedErr) {
+          console.log('❌ Enhanced transcript details failed, trying legacy endpoint...', enhancedErr);
           
-          // Convert legacy data to enhanced format
-          const convertedData: EnhancedTranscriptRecord = {
-            transcript_sid: legacyData.transcript_sid,
-            call_date: legacyData.date_created,
-            duration: legacyData.duration,
-            call_direction: 'outbound',
-            scenario_name: 'Legacy Call',
-            participant_info: {
-              '0': {
-                channel: 0,
-                role: 'customer',
-                name: 'Customer',
-                total_speaking_time: Math.floor(legacyData.duration / 2),
-                word_count: Math.floor((legacyData.full_text?.split(' ').length || 0) / 2),
-                sentence_count: Math.floor((legacyData.full_text?.split('.').length || 0) / 2)
-              },
-              '1': {
-                channel: 1,
-                role: 'agent',
-                name: 'AI Agent',
-                total_speaking_time: Math.floor(legacyData.duration / 2),
-                word_count: Math.floor((legacyData.full_text?.split(' ').length || 0) / 2),
-                sentence_count: Math.floor((legacyData.full_text?.split('.').length || 0) / 2)
-              }
-            },
-            conversation_flow: legacyData.full_text ? legacyData.full_text.split('.').filter(s => s.trim()).map((sentence, index) => ({
-              sequence: index + 1,
-              speaker: {
-                channel: index % 2,
-                role: index % 2 === 0 ? 'agent' : 'customer',
-                name: index % 2 === 0 ? 'AI Agent' : 'Customer'
-              },
-              text: sentence.trim() + '.',
-              start_time: (index * legacyData.duration) / legacyData.full_text.split('.').length,
-              end_time: ((index + 1) * legacyData.duration) / legacyData.full_text.split('.').length,
-              duration: legacyData.duration / legacyData.full_text.split('.').length,
-              confidence: 0.85,
-              word_count: sentence.trim().split(' ').length
-            })) : [],
-            summary_data: {
-              total_duration_seconds: legacyData.duration,
-              total_sentences: legacyData.full_text?.split('.').length || 0,
-              total_words: legacyData.full_text?.split(' ').length || 0,
-              participant_count: 2,
-              average_confidence: 0.85,
-              conversation_stats: {
-                turns: legacyData.full_text?.split('.').length || 0,
-                avg_words_per_turn: Math.floor((legacyData.full_text?.split(' ').length || 0) / (legacyData.full_text?.split('.').length || 1)),
-                speaking_time_distribution: {
-                  '0': { percentage: 50, seconds: Math.floor(legacyData.duration / 2) },
-                  '1': { percentage: 50, seconds: Math.floor(legacyData.duration / 2) }
+          // Fallback to legacy transcript details
+          try {
+            const legacyData = await api.calls.getTranscriptById(transcriptSid);
+            console.log('📜 Legacy transcript details loaded:', legacyData);
+            
+            // Convert legacy data to enhanced format
+            const convertedData: EnhancedTranscriptRecord = {
+              transcript_sid: legacyData.transcript_sid,
+              call_date: legacyData.date_created,
+              duration: legacyData.duration,
+              call_direction: 'outbound',
+              scenario_name: 'Legacy Call',
+              participant_info: {
+                '0': {
+                  channel: 0,
+                  role: 'customer',
+                  name: 'Customer',
+                  total_speaking_time: Math.floor(legacyData.duration / 2),
+                  word_count: Math.floor((legacyData.full_text?.split(' ').length || 0) / 2),
+                  sentence_count: Math.floor((legacyData.full_text?.split('.').length || 0) / 2)
+                },
+                '1': {
+                  channel: 1,
+                  role: 'agent',
+                  name: 'AI Agent',
+                  total_speaking_time: Math.floor(legacyData.duration / 2),
+                  word_count: Math.floor((legacyData.full_text?.split(' ').length || 0) / 2),
+                  sentence_count: Math.floor((legacyData.full_text?.split('.').length || 0) / 2)
                 }
-              }
-            },
-            media_url: undefined,
-            source_type: 'Legacy',
-            status: legacyData.status,
-            full_text: legacyData.full_text,
-            date_created: legacyData.date_created,
-            date_updated: legacyData.date_updated,
-            language_code: legacyData.language_code,
-            created_at: legacyData.created_at
-          };
-          
-          setSelectedTranscript(convertedData);
-          toast.success('Loaded legacy transcript details');
-        } catch (legacyErr) {
-          const message = legacyErr instanceof Error ? legacyErr.message : 'Failed to fetch transcript details';
-          console.error('All transcript detail fetch methods failed:', legacyErr);
-          toast.error(message);
-          setError(message);
-          setSelectedTranscript(null);
+              },
+              conversation_flow: legacyData.full_text ? legacyData.full_text.split('.').filter(s => s.trim()).map((sentence, index) => ({
+                sequence: index + 1,
+                speaker: {
+                  channel: index % 2,
+                  role: index % 2 === 0 ? 'agent' : 'customer',
+                  name: index % 2 === 0 ? 'AI Agent' : 'Customer'
+                },
+                text: sentence.trim() + '.',
+                start_time: (index * legacyData.duration) / legacyData.full_text.split('.').length,
+                end_time: ((index + 1) * legacyData.duration) / legacyData.full_text.split('.').length,
+                duration: legacyData.duration / legacyData.full_text.split('.').length,
+                confidence: 0.85,
+                word_count: sentence.trim().split(' ').length
+              })) : [],
+              summary_data: {
+                total_duration_seconds: legacyData.duration,
+                total_sentences: legacyData.full_text?.split('.').length || 0,
+                total_words: legacyData.full_text?.split(' ').length || 0,
+                participant_count: 2,
+                average_confidence: 0.85,
+                conversation_stats: {
+                  turns: legacyData.full_text?.split('.').length || 0,
+                  avg_words_per_turn: Math.floor((legacyData.full_text?.split(' ').length || 0) / (legacyData.full_text?.split('.').length || 1)),
+                  speaking_time_distribution: {
+                    '0': { percentage: 50, seconds: Math.floor(legacyData.duration / 2) },
+                    '1': { percentage: 50, seconds: Math.floor(legacyData.duration / 2) }
+                  }
+                }
+              },
+              media_url: undefined,
+              source_type: 'Legacy',
+              status: legacyData.status,
+              full_text: legacyData.full_text,
+              date_created: legacyData.date_created,
+              date_updated: legacyData.date_updated,
+              language_code: legacyData.language_code,
+              created_at: legacyData.created_at
+            };
+            
+            setSelectedTranscript(convertedData);
+            toast.success('Loaded legacy transcript details');
+          } catch (legacyErr) {
+            const message = legacyErr instanceof Error ? legacyErr.message : 'Failed to fetch transcript details';
+            console.error('❌ All transcript detail fetch methods failed:', legacyErr);
+            toast.error(message);
+            setError(message);
+            setSelectedTranscript(null);
+          }
         }
       }
     } finally {
@@ -423,6 +559,13 @@ export const CallNotes: React.FC = () => {
             Debug: {debugInfo}
           </div>
         )}
+        {/* Authentication Debug Info */}
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          Auth Status: {isAuthenticated ? '✅ Authenticated' : '❌ Not Authenticated'} | 
+          Token: {token ? '✅ Present' : '❌ Missing'} | 
+          LocalStorage: {localStorageToken ? '✅ Present' : '❌ Missing'} | 
+          User: {user?.email || 'None'}
+        </div>
       </div>
 
       <div className="flex h-[calc(100vh-12rem)]">

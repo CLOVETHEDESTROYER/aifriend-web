@@ -69,6 +69,7 @@ const useAuthStore = create<AuthState>()(
       logout: async () => {
         try {
           localStorage.removeItem('token');
+          localStorage.removeItem('businessProfile'); // Clear business profile on logout
           set({
             isAuthenticated: false,
             token: null,

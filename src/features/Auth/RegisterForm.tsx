@@ -24,8 +24,8 @@ export const RegisterForm: React.FC = () => {
     setIsLoading(true);
     try {
       await register(formData.email, formData.password);
-      toast.success('Registration successful! You are now logged in.');
-      navigate('/dashboard');
+      toast.success('Registration successful! Let\'s set up your business profile.');
+      navigate('/onboarding');
     } catch (error) {
       console.error('Registration error:', error);
       

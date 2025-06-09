@@ -18,6 +18,212 @@ AIFriend Web is a React-based SaaS application that enables users to create and 
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
+## URGENT: Stored Transcripts Implementation Required
+
+### Current Problem
+
+The frontend currently fetches transcripts from Twilio API on every request, causing:
+
+- ❌ High API costs (Twilio charges per request)
+- ❌ Slow performance
+- ❌ No search capability
+- ❌ No user notes/tags functionality
+
+### Solution: Store Twilio Transcripts in Database
+
+The frontend expects **exact same data format as Twilio API**. We need to store raw Twilio transcript data and serve it identically.
+
+#### Required Database Model
+
+```python
+class StoredTwilioTranscript(Base):
+    __tablename__ = "stored_twilio_transcripts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # User isolation
+
+    # Store exact Twilio response format
+    transcript_sid = Column(String, unique=True, nullable=False, index=True)  # Twilio's sid
+    status = Column(String, nullable=False)  # "completed", "processing", etc.
+    date_created = Column(String, nullable=False)  # Keep as ISO string like Twilio
+    date_updated = Column(String, nullable=False)  # Keep as ISO string like Twilio
+    duration = Column(Integer, nullable=False)  # seconds
+    language_code = Column(String, nullable=False, default="en-US")
+    sentences = Column(JSON, nullable=False)  # CRITICAL: Store full Twilio sentences array
+
+    # Optional call metadata (can be enhanced later)
+    call_sid = Column(String, nullable=True)
+    scenario_name = Column(String, default="Voice Call")
+    call_direction = Column(String, default="outbound")
+    phone_number = Column(String, nullable=True)
+
+    # Storage metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="stored_transcripts")
+
+# Add to User model
+class User(Base):
+    # ... existing fields ...
+    stored_transcripts = relationship("StoredTwilioTranscript", back_populates="user")
+```
+
+#### Required API Endpoints (Exact Twilio Format)
+
+```python
+@app.get("/stored-twilio-transcripts")
+async def get_stored_transcripts(
+    page_size: int = Query(10, le=100),
+    page_token: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return stored transcripts in EXACT same format as Twilio API"""
+
+    query = db.query(StoredTwilioTranscript).filter(
+        StoredTwilioTranscript.user_id == current_user.id
+    ).order_by(StoredTwilioTranscript.date_created.desc())
+
+    skip = int(page_token) if page_token else 0
+    transcripts = query.offset(skip).limit(page_size).all()
+
+    # Return in EXACT same format as Twilio API
+    return {
+        "transcripts": [
+            {
+                "sid": t.transcript_sid,
+                "status": t.status,
+                "date_created": t.date_created,
+                "date_updated": t.date_updated,
+                "duration": t.duration,
+                "language_code": t.language_code,
+                "sentences": t.sentences  # This is the critical part!
+            }
+            for t in transcripts
+        ]
+    }
+
+@app.get("/stored-twilio-transcripts/{transcript_sid}")
+async def get_stored_transcript_detail(
+    transcript_sid: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return stored transcript detail in EXACT same format as Twilio API"""
+
+    transcript = db.query(StoredTwilioTranscript).filter(
+        StoredTwilioTranscript.transcript_sid == transcript_sid,
+        StoredTwilioTranscript.user_id == current_user.id
+    ).first()
+
+    if not transcript:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+
+    # Return in EXACT same format as Twilio detail API
+    return {
+        "sid": transcript.transcript_sid,
+        "status": transcript.status,
+        "date_created": transcript.date_created,
+        "date_updated": transcript.date_updated,
+        "duration": transcript.duration,
+        "language_code": transcript.language_code,
+        "sentences": transcript.sentences  # Full Twilio sentences array
+    }
+```
+
+#### Required Twilio Sentences Format
+
+The `sentences` field must store this exact JSON structure from Twilio:
+
+```json
+[
+  {
+    "text": "Hello, this is Mike Thompson calling about your property listing.",
+    "speaker": 1,
+    "start_time": 0.5,
+    "end_time": 4.2,
+    "confidence": 0.95
+  },
+  {
+    "text": "Hi Mike, thanks for calling. Which property are you interested in?",
+    "speaker": 0,
+    "start_time": 4.8,
+    "end_time": 8.1,
+    "confidence": 0.92
+  }
+]
+```
+
+#### Storage Process (Auto-Store After Calls)
+
+```python
+@app.post("/store-transcript/{transcript_sid}")
+async def store_transcript_from_twilio(
+    transcript_sid: str,
+    user_id: int,  # Get from call metadata
+    call_sid: Optional[str] = None,
+    scenario_name: str = "Voice Call",
+    db: Session = Depends(get_db)
+):
+    """Fetch transcript from Twilio and store in our database"""
+
+    # Check if already stored
+    existing = db.query(StoredTwilioTranscript).filter(
+        StoredTwilioTranscript.transcript_sid == transcript_sid
+    ).first()
+
+    if existing:
+        return {"status": "already_stored", "transcript_sid": transcript_sid}
+
+    try:
+        # Fetch from Twilio
+        twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        transcript = twilio_client.intelligence.v2.transcripts(transcript_sid).fetch()
+
+        # Store in our database with exact Twilio format
+        stored_transcript = StoredTwilioTranscript(
+            user_id=user_id,
+            transcript_sid=transcript.sid,
+            status=transcript.status,
+            date_created=transcript.date_created.isoformat(),
+            date_updated=transcript.date_updated.isoformat(),
+            duration=transcript.duration,
+            language_code=transcript.language_code,
+            sentences=transcript.sentences,  # Store raw Twilio sentences
+            call_sid=call_sid,
+            scenario_name=scenario_name
+        )
+
+        db.add(stored_transcript)
+        db.commit()
+
+        return {"status": "stored", "transcript_sid": transcript_sid}
+
+    except Exception as e:
+        logger.error(f"Failed to store transcript {transcript_sid}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to store transcript: {str(e)}")
+```
+
+### Frontend Integration (Already Complete)
+
+The frontend in `src/pages/CallNotes.tsx` will automatically:
+
+1. **Try stored transcripts first** via `/stored-twilio-transcripts`
+2. **Fall back to Twilio API** if no stored data
+3. **Use same display logic** (no UI changes needed)
+4. **Same transformation function** already exists
+
+**Frontend expects this API call to work:**
+
+```typescript
+// This should return data in exact Twilio format
+const storedData = await api.calls.getStoredTwilioTranscripts(skip, limit);
+
+// Then frontend uses existing transformTwilioToEnhanced() function
+const enhancedData = transformTwilioToEnhanced(storedData.transcripts[0]);
+```
+
 ## Frontend-Backend Connection
 
 ### 1. API Client Configuration

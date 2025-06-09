@@ -5,12 +5,15 @@ import { Header } from './components/Layout/Header';
 import { Dashboard } from './features/Dashboard/Dashboard';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { Onboarding } from './pages/Onboarding';
 import { MakeCall } from './pages/MakeCall';
 import { Scenarios } from './pages/Scenarios';
 import { CallInterface } from './features/Call/CallInterface';
 import { AuthProvider } from './context/AuthContext';
+import { BusinessProfileProvider } from './context/BusinessProfileContext';
 import { ScenarioProvider } from './context/ScenarioContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { OnboardingCheck } from './components/Onboarding/OnboardingCheck';
 import { MainLayout } from './components/Layout/MainLayout';
 import { CallNotes } from './pages/CallNotes';
 import { ScheduledMeetings } from './pages/ScheduledMeetings';
@@ -22,10 +25,20 @@ function AppContent() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route
+          path="/onboarding"
+          element={
+            <ProtectedRoute>
+              <Onboarding />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/"
           element={
             <ProtectedRoute>
-              <Navigate to="/dashboard" replace />
+              <OnboardingCheck>
+                <Navigate to="/dashboard" replace />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -33,7 +46,9 @@ function AppContent() {
           path="/dashboard"
           element={
             <ProtectedRoute>
-              <Dashboard />
+              <OnboardingCheck>
+                <Dashboard />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -41,7 +56,9 @@ function AppContent() {
           path="/make-call"
           element={
             <ProtectedRoute>
-              <MakeCall />
+              <OnboardingCheck>
+                <MakeCall />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -49,7 +66,9 @@ function AppContent() {
           path="/scenarios"
           element={
             <ProtectedRoute>
-              <Scenarios />
+              <OnboardingCheck>
+                <Scenarios />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -57,7 +76,9 @@ function AppContent() {
           path="/call-notes"
           element={
             <ProtectedRoute>
-              <CallNotes />
+              <OnboardingCheck>
+                <CallNotes />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -65,7 +86,9 @@ function AppContent() {
           path="/scheduled-meetings"
           element={
             <ProtectedRoute>
-              <ScheduledMeetings />
+              <OnboardingCheck>
+                <ScheduledMeetings />
+              </OnboardingCheck>
             </ProtectedRoute>
           }
         />
@@ -96,9 +119,11 @@ function App() {
 
   return (
     <AuthProvider>
-      <ScenarioProvider>
-        <AppContent />
-      </ScenarioProvider>
+      <BusinessProfileProvider>
+        <ScenarioProvider>
+          <AppContent />
+        </ScenarioProvider>
+      </BusinessProfileProvider>
     </AuthProvider>
   );
 }

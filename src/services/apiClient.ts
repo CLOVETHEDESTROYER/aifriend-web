@@ -350,6 +350,58 @@ export const api = {
         }
         throw error;
       }
+    },
+    // New stored Twilio transcript methods (same format as Twilio API)
+    getStoredTwilioTranscripts: async (skip = 0, limit = 10) => {
+      // Use the working endpoint from backend logs: /stored-transcripts/
+      const response = await apiClient.get('/stored-transcripts/', {
+        params: { skip, limit } // Use skip/limit format like other endpoints
+      });
+      
+      // Transform to match Twilio API format expected by frontend
+      return {
+        transcripts: response.data || []
+      };
+    },
+    getStoredTwilioTranscriptById: async (transcriptSid: string) => {
+      try {
+        // Use the working endpoint from backend logs: /stored-transcripts/{id}
+        const response = await apiClient.get<TranscriptRecord>(`/stored-transcripts/${transcriptSid}`);
+        
+        // Transform legacy format to Twilio format if needed
+        const legacyData = response.data;
+        
+        // Check if it's already in Twilio format (has sentences property)
+        if ('sentences' in legacyData && Array.isArray((legacyData as any).sentences)) {
+          return legacyData as unknown as TwilioTranscriptResponse;
+        }
+        
+        // Otherwise, transform legacy format to Twilio format
+        const twilioFormat: TwilioTranscriptResponse = {
+          sid: legacyData.transcript_sid,
+          status: legacyData.status,
+          date_created: legacyData.date_created,
+          date_updated: legacyData.date_updated,
+          duration: legacyData.duration,
+          language_code: legacyData.language_code,
+          sentences: legacyData.full_text ? 
+            // Convert full_text to sentences format
+            legacyData.full_text.split('.').filter(s => s.trim()).map((sentence, index) => ({
+              text: sentence.trim() + '.',
+              speaker: index % 2, // Alternate speakers
+              start_time: (index * legacyData.duration) / legacyData.full_text!.split('.').length,
+              end_time: ((index + 1) * legacyData.duration) / legacyData.full_text!.split('.').length,
+              confidence: 0.85
+            })) : []
+        };
+        
+        return twilioFormat;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 500) {
+          throw new Error(`Failed to fetch stored transcript: ${error.response.data?.detail || 'Server error'}`);
+        }
+        throw error;
+      }
     }
   },
   scenarios: {
