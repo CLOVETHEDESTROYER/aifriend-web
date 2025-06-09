@@ -17,6 +17,7 @@ import { OnboardingCheck } from './components/Onboarding/OnboardingCheck';
 import { MainLayout } from './components/Layout/MainLayout';
 import { CallNotes } from './pages/CallNotes';
 import { ScheduledMeetings } from './pages/ScheduledMeetings';
+import { Settings } from './pages/Settings';
 
 function AppContent() {
   return (
@@ -88,6 +89,16 @@ function AppContent() {
             <ProtectedRoute>
               <OnboardingCheck>
                 <ScheduledMeetings />
+              </OnboardingCheck>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <OnboardingCheck>
+                <Settings />
               </OnboardingCheck>
             </ProtectedRoute>
           }

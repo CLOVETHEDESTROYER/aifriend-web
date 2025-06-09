@@ -402,6 +402,23 @@ export const api = {
         }
         throw error;
       }
+    },
+    // Twilio Account Management
+    getTwilioAccount: async () => {
+      const response = await apiClient.get('/twilio/account');
+      return response.data;
+    },
+    provisionPhoneNumber: async (areaCode?: string) => {
+      const response = await apiClient.post('/twilio/provision-number', { area_code: areaCode });
+      return response.data;
+    },
+    releasePhoneNumber: async (phoneNumber: string) => {
+      const response = await apiClient.delete(`/twilio/release-number/${phoneNumber}`);
+      return response.data;
+    },
+    getUserPhoneNumbers: async () => {
+      const response = await apiClient.get('/twilio/user-numbers');
+      return response.data;
     }
   },
   scenarios: {
@@ -452,12 +469,12 @@ export const api = {
     },
     getEvents: async (maxResults = 50) => {
       try {
-        // Get events from 1 month ago to 6 months in the future
+        // Get events from 2 years ago to 1 year in the future to maintain full history
         const timeMin = new Date();
-        timeMin.setMonth(timeMin.getMonth() - 1);
+        timeMin.setFullYear(timeMin.getFullYear() - 2);
         
         const timeMax = new Date();
-        timeMax.setMonth(timeMax.getMonth() + 6);
+        timeMax.setFullYear(timeMax.getFullYear() + 1);
         
         const params = new URLSearchParams({
           max_results: maxResults.toString(),
@@ -465,9 +482,51 @@ export const api = {
           time_max: timeMax.toISOString()
         });
         
+        // Debug: Log the parameters being sent
+        console.log('📅 Calendar API request parameters:', {
+          max_results: maxResults,
+          time_min: timeMin.toISOString(),
+          time_max: timeMax.toISOString(),
+          url: `/google-calendar/events?${params}`,
+          currentDate: new Date().toISOString()
+        });
+        
         const response = await apiClient.get(`/google-calendar/events?${params}`);
-        return response.data;
+        
+        // Debug: Log the response in detail
+        const events = response.data || [];
+        console.log('📅 Calendar API response details:', {
+          eventCount: events.length,
+          requestedRange: {
+            from: timeMin.toISOString(),
+            to: timeMax.toISOString()
+          },
+          actualEventDates: events.length > 0 ? {
+            earliest: Math.min(...events.map((e: any) => new Date(e.start).getTime())),
+            latest: Math.max(...events.map((e: any) => new Date(e.start).getTime())),
+            earliestFormatted: new Date(Math.min(...events.map((e: any) => new Date(e.start).getTime()))).toISOString(),
+            latestFormatted: new Date(Math.max(...events.map((e: any) => new Date(e.start).getTime()))).toISOString()
+          } : 'No events found',
+          eventsInLastWeek: events.filter((e: any) => {
+            const eventDate = new Date(e.start);
+            const lastWeek = new Date();
+            lastWeek.setDate(lastWeek.getDate() - 7);
+            return eventDate >= lastWeek;
+          }).length,
+          eventsInJune2025: events.filter((e: any) => {
+            const eventDate = new Date(e.start);
+            return eventDate.getFullYear() === 2025 && eventDate.getMonth() === 5; // June = month 5
+          }).length,
+          sampleEventDates: events.slice(0, 5).map((e: any) => ({
+            summary: e.summary,
+            start: e.start,
+            parsed: new Date(e.start).toISOString()
+          }))
+        });
+        
+        return events;
       } catch (error) {
+        console.error('Calendar API error:', error);
         if (axios.isAxiosError(error) && error.response?.status === 500) {
           const errorDetail = (error.response?.data as any)?.detail as string;
           if (errorDetail && errorDetail.includes('invalid_grant')) {
@@ -478,10 +537,57 @@ export const api = {
         throw error;
       }
     },
+    // Add a new method to get events without date restrictions for testing
+    getAllEventsUnfiltered: async (maxResults = 1000) => {
+      try {
+        // Try to get events without any date filtering parameters
+        const params = new URLSearchParams({
+          max_results: maxResults.toString()
+        });
+        
+        console.log('📅 Attempting to get ALL events without date filters...');
+        
+        const response = await apiClient.get(`/google-calendar/events?${params}`);
+        const events = response.data || [];
+        
+        console.log('📅 Unfiltered events response:', {
+          totalEvents: events.length,
+          eventsByYear: events.reduce((acc: any, event: any) => {
+            const year = new Date(event.start).getFullYear();
+            acc[year] = (acc[year] || 0) + 1;
+            return acc;
+          }, {}),
+          eventsByMonth: events.reduce((acc: any, event: any) => {
+            const date = new Date(event.start);
+            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+          }, {})
+        });
+        
+        return events;
+      } catch (error) {
+        console.error('Unfiltered calendar API error:', error);
+        throw error;
+      }
+    },
     // Check credentials by trying to fetch events - if it fails, user needs to authenticate
     checkCredentials: async () => {
       try {
-        await apiClient.get('/google-calendar/events?max_results=1');
+        // Use same time range as getEvents to test full historical access
+        const timeMin = new Date();
+        timeMin.setFullYear(timeMin.getFullYear() - 2);
+        
+        const timeMax = new Date();
+        timeMax.setFullYear(timeMax.getFullYear() + 1);
+        
+        const params = new URLSearchParams({
+          max_results: '1',
+          time_min: timeMin.toISOString(),
+          time_max: timeMax.toISOString()
+        });
+        
+        await apiClient.get(`/google-calendar/events?${params}`);
         return true;
       } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === 500) {

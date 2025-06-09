@@ -26,7 +26,7 @@ import sqlalchemy # Ensure this is imported
 import threading
 import time
 from app.auth import router as auth_router, get_current_user
-from app.models import User, Token, CallSchedule
+from app.models import User, Token, CallSchedule, UserPhoneNumber
 from app.utils import verify_password, create_access_token
 from app.schemas import TokenResponse, RealtimeSessionCreate, RealtimeSessionResponse,SignalingMessage, SignalingResponse
 from app.db import engine, get_db, SessionLocal, Base
@@ -363,33 +363,43 @@ scenario=call.scenario
 async def make_call(
 phone_number: str,
 scenario: str,
-user_name: str = None,
 current_user: User = Depends(get_current_user),
 db: Session = Depends(get_db)
 ):
-try:
-public_url = os.getenv('PUBLIC_URL', '').strip()
-logger.info(f"Using PUBLIC_URL from environment: {public_url}")
+try: # Get user's first available phone number as the caller ID
+user_number = db.query(UserPhoneNumber).filter(
+UserPhoneNumber.user_id == current_user.id,
+UserPhoneNumber.is_active == True,
+UserPhoneNumber.voice_capable == True
+).first()
 
-        # Construct the complete webhook URL with https://
+        if not user_number:
+            raise HTTPException(
+                status_code=400,
+                detail="No phone number available. Please provision a phone number in Settings first."
+            )
+
+        # Use user's phone number as the caller ID
+        from_number = user_number.phone_number
+
+        # Rest of the existing logic...
+        public_url = os.getenv('PUBLIC_URL', '').strip()
         webhook_url = f"https://{public_url}/incoming-call/{scenario}"
-        logger.info(f"Constructed webhook URL: {webhook_url}")
 
-        # Initialize Twilio client
-        # twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-        # Make the call using Twilio
         call = twilio_client.calls.create(
-            to=f"+1{phone_number}",  # Ensure proper phone number formatting
-            from_=TWILIO_PHONE_NUMBER,
+            to=f"+1{phone_number}",
+            from_=from_number,  # Use user's number
             url=webhook_url,
             record=True,
-            time_limit=90  # Twilio parameter for max call duration in seconds
+            time_limit=90
         )
 
-        return {"message": "Call initiated", "call_sid": call.sid}
+        return {"message": "Call initiated", "call_sid": call.sid, "from_number": from_number}
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error initiating call: {str(e)}")
+        logger.error(f"Error making call: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Webhook Endpoint for Incoming Calls
@@ -1305,6 +1315,250 @@ logger.info("WebSocket connection accepted")
         logger.error(f"Error in WebSocket connection: {e}", exc_info=True)
         await websocket.close(code=1011)
 
+# ==============================================================
+
+# URGENT BACKEND IMPLEMENTATION TASK
+
+# ==============================================================
+
+# Backend Implementation: Twilio Account Management & User Phone Number Provisioning
+
+## Context & Overview
+
+The frontend has been updated with a complete Twilio account management system. Users can now access a Settings page (`/settings`) with a "Phone Numbers" tab that allows them to:
+
+- View their Twilio account status and balance
+- Provision new phone numbers (with optional area code)
+- Manage and release their phone numbers
+- See their current phone number inventory
+
+**Frontend API Client Expectations**: The frontend is making calls to these new endpoints:
+
+- `GET /twilio/account` - Get account info
+- `POST /twilio/provision-number` - Provision new number
+- `DELETE /twilio/release-number/{phone_number}` - Release number
+- `GET /twilio/user-numbers` - Get user's numbers
+
+## Required Implementation
+
+### 1. Database Schema Addition
+
+Create a new table to associate users with their phone numbers:
+
+```python
+# Add to your models file (app/models.py)
+
+class UserPhoneNumber(Base):
+    __tablename__ = "user_phone_numbers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    phone_number = Column(String, unique=True, nullable=False, index=True)
+    twilio_sid = Column(String, unique=True, nullable=False)
+    friendly_name = Column(String, nullable=True)
+    date_provisioned = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+    # Twilio capabilities
+    voice_capable = Column(Boolean, default=True)
+    sms_capable = Column(Boolean, default=True)
+
+    # Relationship
+    user = relationship("User", back_populates="phone_numbers")
+
+# Add to User model:
+class User(Base):
+    # ... existing fields ...
+    phone_numbers = relationship("UserPhoneNumber", back_populates="user")
+```
+
+### 2. API Endpoints Implementation
+
+Add these endpoints to your FastAPI main.py:
+
+```python
+from typing import Optional
+from pydantic import BaseModel
+from sqlalchemy import or_
+from fastapi import Query
+
+# Pydantic models
+class PhoneNumberProvisionRequest(BaseModel):
+    area_code: Optional[str] = None
+
+class PhoneNumberResponse(BaseModel):
+    sid: str
+    phoneNumber: str
+    friendlyName: Optional[str]
+    capabilities: dict
+    dateCreated: str
+
+class TwilioAccountResponse(BaseModel):
+    accountSid: str
+    balance: str
+    status: str
+
+# Endpoints
+@app.get("/twilio/account", response_model=TwilioAccountResponse)
+async def get_twilio_account(current_user: User = Depends(get_current_user)):
+    """Get Twilio account information"""
+    try:
+        # Fetch account balance from Twilio
+        balance = twilio_client.balance.fetch()
+        account = twilio_client.api.accounts(TWILIO_ACCOUNT_SID).fetch()
+
+        return TwilioAccountResponse(
+            accountSid=TWILIO_ACCOUNT_SID,
+            balance=balance.balance,
+            status=account.status
+        )
+    except Exception as e:
+        logger.error(f"Error fetching Twilio account: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch account information")
+
+@app.post("/twilio/provision-number")
+async def provision_phone_number(
+    request: PhoneNumberProvisionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Provision a new phone number for the user"""
+    try:
+        # Search for available numbers
+        search_params = {
+            'limit': 10,
+            'voice_enabled': True,
+            'sms_enabled': True
+        }
+
+        if request.area_code:
+            search_params['area_code'] = request.area_code
+
+        available_numbers = twilio_client.available_phone_numbers('US').local.list(**search_params)
+
+        if not available_numbers:
+            raise HTTPException(status_code=404, detail="No available phone numbers found")
+
+        # Purchase the first available number
+        selected_number = available_numbers[0]
+        purchased_number = twilio_client.incoming_phone_numbers.create(
+            phone_number=selected_number.phone_number,
+            voice_url=f"https://{os.getenv('PUBLIC_URL')}/incoming-call/default",  # Default webhook
+            voice_method='POST'
+        )
+
+        # Store in database
+        user_phone = UserPhoneNumber(
+            user_id=current_user.id,
+            phone_number=purchased_number.phone_number,
+            twilio_sid=purchased_number.sid,
+            friendly_name=purchased_number.friendly_name,
+            voice_capable=purchased_number.capabilities.get('voice', False),
+            sms_capable=purchased_number.capabilities.get('sms', False)
+        )
+
+        db.add(user_phone)
+        db.commit()
+        db.refresh(user_phone)
+
+        return {
+            "phoneNumber": purchased_number.phone_number,
+            "sid": purchased_number.sid,
+            "message": f"Phone number {purchased_number.phone_number} provisioned successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"Error provisioning phone number: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to provision phone number: {str(e)}")
+
+@app.get("/twilio/user-numbers")
+async def get_user_phone_numbers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get phone numbers assigned to the current user"""
+    try:
+        user_numbers = db.query(UserPhoneNumber).filter(
+            UserPhoneNumber.user_id == current_user.id,
+            UserPhoneNumber.is_active == True
+        ).all()
+
+        # Enrich with current Twilio data
+        enriched_numbers = []
+        for user_number in user_numbers:
+            try:
+                # Fetch current data from Twilio
+                twilio_number = twilio_client.incoming_phone_numbers(user_number.twilio_sid).fetch()
+
+                enriched_numbers.append({
+                    "sid": twilio_number.sid,
+                    "phoneNumber": twilio_number.phone_number,
+                    "friendlyName": twilio_number.friendly_name or "No name set",
+                    "capabilities": {
+                        "voice": twilio_number.capabilities.get('voice', False),
+                        "sms": twilio_number.capabilities.get('sms', False)
+                    },
+                    "dateCreated": user_number.date_provisioned.isoformat()
+                })
+            except Exception as e:
+                logger.warning(f"Could not fetch Twilio data for {user_number.phone_number}: {e}")
+                # Fallback to database data
+                enriched_numbers.append({
+                    "sid": user_number.twilio_sid,
+                    "phoneNumber": user_number.phone_number,
+                    "friendlyName": user_number.friendly_name or "No name set",
+                    "capabilities": {
+                        "voice": user_number.voice_capable,
+                        "sms": user_number.sms_capable
+                    },
+                    "dateCreated": user_number.date_provisioned.isoformat()
+                })
+
+        return enriched_numbers
+
+    except Exception as e:
+        logger.error(f"Error fetching user phone numbers: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch phone numbers")
+
+@app.delete("/twilio/release-number/{phone_number}")
+async def release_phone_number(
+    phone_number: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Release a phone number"""
+    try:
+        # Verify user owns this number
+        user_number = db.query(UserPhoneNumber).filter(
+            UserPhoneNumber.user_id == current_user.id,
+            UserPhoneNumber.phone_number == phone_number,
+            UserPhoneNumber.is_active == True
+        ).first()
+
+        if not user_number:
+            raise HTTPException(status_code=404, detail="Phone number not found or not owned by user")
+
+        # Release from Twilio
+        twilio_client.incoming_phone_numbers(user_number.twilio_sid).delete()
+
+        # Mark as inactive in database (keep for history)
+        user_number.is_active = False
+        db.commit()
+
+        return {"message": f"Phone number {phone_number} released successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error releasing phone number {phone_number}: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to release phone number: {str(e)}")
+
+# ==============================================================
+# END OF URGENT BACKEND IMPLEMENTATION TASK
+# ==============================================================
+
 if **name** == "**main**":
 import uvicorn
 uvicorn.run(app, host="0.0.0.0", port=PORT)
@@ -1420,3 +1674,4 @@ raise ValueError("OPENAI_API_KEY environment variable is not set")
 
 MAX_SESSION_DURATION = 3600 # 1 hour in seconds
 SESSION_CLEANUP_INTERVAL = 300 # 5 minutes in seconds
+```

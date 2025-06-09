@@ -93,8 +93,26 @@ export const ScheduledMeetings: React.FC = () => {
   const loadCalendarEvents = async () => {
     try {
       setLoadingEvents(true);
-      const events = await api.calendar.getEvents(100);
+      // Request more events to ensure we get historical data
+      const events = await api.calendar.getEvents(500);
       console.log('Calendar events loaded:', events.length, 'events');
+      
+      // Debug: Log date range of events
+      if (events && events.length > 0) {
+        const dates = events.map((e: CalendarEvent) => new Date(e.start)).sort((a: Date, b: Date) => a.getTime() - b.getTime());
+        console.log('Event date range:', {
+          earliest: dates[0]?.toISOString(),
+          latest: dates[dates.length - 1]?.toISOString(),
+          total: events.length
+        });
+        
+        // Check for events from last week
+        const lastWeek = new Date();
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        const lastWeekEvents = events.filter((e: CalendarEvent) => new Date(e.start) >= lastWeek);
+        console.log('Events from last week:', lastWeekEvents.length);
+      }
+      
       setCalendarEvents(events || []);
     } catch (error: any) {
       console.error('Error loading calendar events:', error);
@@ -583,6 +601,33 @@ export const ScheduledMeetings: React.FC = () => {
             >
               June 2025 (Events)
             </button>
+            <button
+              onClick={async () => {
+                try {
+                  console.log('🔬 Testing unfiltered calendar events...');
+                  const unfilteredEvents = await api.calendar.getAllEventsUnfiltered();
+                  console.log('🔬 Unfiltered vs Filtered comparison:', {
+                    unfilteredCount: unfilteredEvents.length,
+                    filteredCount: calendarEvents.length,
+                    difference: unfilteredEvents.length - calendarEvents.length
+                  });
+                  
+                  // Test if we can get the missing events
+                  if (unfilteredEvents.length > calendarEvents.length) {
+                    setCalendarEvents(unfilteredEvents);
+                    toast.success(`Found ${unfilteredEvents.length - calendarEvents.length} additional events! Check console for details.`, { duration: 5000 });
+                  } else {
+                    toast.success('No additional events found with unfiltered request', { duration: 3000 });
+                  }
+                } catch (error) {
+                  console.error('🔬 Unfiltered test failed:', error);
+                  toast.error('Failed to test unfiltered events');
+                }
+              }}
+              className="px-3 py-1 text-sm border border-purple-300 dark:border-purple-600 rounded hover:bg-purple-50 dark:hover:bg-purple-800 transition-colors text-purple-600 dark:text-purple-400"
+            >
+              🔬 Test All Events
+            </button>
           </div>
           
           <div className="flex items-center space-x-2">
@@ -640,14 +685,14 @@ export const ScheduledMeetings: React.FC = () => {
                   {viewType}
                 </button>
               ))}
-                      </div>
-                      
+            </div>
+            
             <div className="text-sm text-gray-500 dark:text-gray-400">
               {calendarEvents.length} events
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Calendar Content */}
       <div className="flex-1 p-6">
@@ -672,7 +717,7 @@ export const ScheduledMeetings: React.FC = () => {
             <div className="flex justify-between items-start mb-4">
               <h3 className="text-xl font-bold text-text-light dark:text-text-dark">
                 {selectedEvent.summary}
-            </h3>
+              </h3>
               <button
                 onClick={() => {
                   console.log('🔍 Close button clicked');

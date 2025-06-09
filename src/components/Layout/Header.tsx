@@ -37,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({ isAuthenticated }) => {
                   { path: '/scenarios', label: 'Scenarios' },
                   { path: '/call-notes', label: 'Call Notes' },
                   { path: '/scheduled-meetings', label: 'Meetings' },
+                  { path: '/settings', label: 'Settings' },
                 ].map(({ path, label }) => (
                   <Link
                     key={path}

@@ -30,7 +30,7 @@ interface BusinessMetrics {
   successRate: number;
 }
 
-interface TodaysMeeting {
+interface RecentMeeting {
   id: string;
   title: string;
   start: string;
@@ -44,7 +44,7 @@ export const Dashboard: React.FC = () => {
   const { refreshScenarios } = useScenarios();
   const { businessProfile } = useBusinessProfile();
   const [recentCalls, setRecentCalls] = useState<EnhancedTranscriptListItem[]>([]);
-  const [todaysMeetings, setTodaysMeetings] = useState<TodaysMeeting[]>([]);
+  const [todaysMeetings, setTodaysMeetings] = useState<RecentMeeting[]>([]);
   const [businessMetrics, setBusinessMetrics] = useState<BusinessMetrics>({
     callsToday: 0,
     timeSaved: 0,
@@ -142,36 +142,40 @@ export const Dashboard: React.FC = () => {
 
   const loadTodaysMeetings = async () => {
     try {
-      const events = await api.calendar.getEvents(10);
+      // Check if Google Calendar is connected first
+      const hasCredentials = await api.calendar.checkCredentials();
       
-      // Filter for today's events
+      if (!hasCredentials) {
+        console.log('📅 No Google Calendar credentials, skipping meetings load');
+        // Set empty state instead of error
+        setTodaysMeetings([]);
+        return;
+      }
+
+      const events = await api.calendar.getEvents(50);
+      
+      // Filter for today's events only
       const today = new Date();
       const todaysEvents = events.filter((event: any) => {
         const eventDate = new Date(event.start);
         return eventDate.toDateString() === today.toDateString();
       });
 
-      const meetings: TodaysMeeting[] = todaysEvents.map((event: any) => ({
+      const meetings: RecentMeeting[] = todaysEvents.map((event: any) => ({
         id: event.id,
         title: event.summary || 'Meeting',
         start: event.start,
         end: event.end,
         status: new Date(event.start) > new Date() ? 'upcoming' : 'completed'
-      }));
+      })).sort((a: RecentMeeting, b: RecentMeeting) => 
+        new Date(a.start).getTime() - new Date(b.start).getTime()
+      );
 
       setTodaysMeetings(meetings);
     } catch (error) {
       console.error('Error loading meetings:', error);
-      // Set some mock data for demonstration
-      setTodaysMeetings([
-        {
-          id: 'demo-meeting-1',
-          title: 'Client Consultation',
-          start: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours from now
-          end: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-          status: 'upcoming'
-        }
-      ]);
+      // Don't show error toast, just set empty state
+      setTodaysMeetings([]);
     }
   };
 
@@ -260,6 +264,77 @@ export const Dashboard: React.FC = () => {
 
   const handleSelectPrompt = (prompt: SavedPrompt) => {
     console.log('Selected prompt:', prompt);
+  };
+
+  const renderCalendarSection = () => {
+    const [isCheckingCalendar, setIsCheckingCalendar] = useState(false);
+    
+    const handleConnectCalendar = async () => {
+      try {
+        setIsCheckingCalendar(true);
+        toast.loading('Connecting to Google Calendar...', { id: 'calendar-connect' });
+        await api.calendar.authorize();
+      } catch (error) {
+        console.error('Calendar connection error:', error);
+        toast.error('Failed to connect Google Calendar', { id: 'calendar-connect' });
+      } finally {
+        setIsCheckingCalendar(false);
+      }
+    };
+
+    if (todaysMeetings.length === 0) {
+      return (
+        <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+          <CalendarDaysIcon className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p className="mb-2">No meetings scheduled for today</p>
+          <button
+            onClick={handleConnectCalendar}
+            disabled={isCheckingCalendar}
+            className="text-sm text-blue-600 hover:text-blue-700 underline disabled:opacity-50"
+          >
+            {isCheckingCalendar ? 'Connecting...' : 'Connect Google Calendar'}
+          </button>
+          <p className="text-xs text-gray-400 mt-2">
+            Connect your calendar to see today's meetings
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {todaysMeetings.map((meeting) => (
+          <div key={meeting.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-3 h-3 rounded-full ${
+                  meeting.status === 'upcoming' ? 'bg-blue-500' :
+                  meeting.status === 'in-progress' ? 'bg-yellow-500' :
+                  'bg-green-500'
+                }`} />
+                <span className="font-medium text-gray-900 dark:text-white text-sm">
+                  {meeting.title}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {formatDateTime(meeting.start)} - {formatDateTime(meeting.end)}
+              </p>
+            </div>
+            <div className="text-right">
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                meeting.status === 'upcoming' 
+                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                  : meeting.status === 'in-progress'
+                  ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                  : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+              }`}>
+                {meeting.status.replace('-', ' ')}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -401,7 +476,7 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Today's Meetings */}
+          {/* Today's Schedule */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium text-gray-900 dark:text-white flex items-center gap-2">
@@ -411,46 +486,7 @@ export const Dashboard: React.FC = () => {
               <span className="text-sm text-gray-500 dark:text-gray-400">{new Date().toLocaleDateString()}</span>
             </div>
             
-            <div className="space-y-4">
-              {todaysMeetings.length > 0 ? (
-                todaysMeetings.map((meeting) => (
-                  <div key={meeting.id} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <div className={`w-3 h-3 rounded-full ${
-                          meeting.status === 'upcoming' ? 'bg-blue-500' :
-                          meeting.status === 'in-progress' ? 'bg-yellow-500' :
-                          'bg-green-500'
-                        }`} />
-                        <span className="font-medium text-gray-900 dark:text-white text-sm">
-                          {meeting.title}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {formatDateTime(meeting.start)} - {formatDateTime(meeting.end)}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        meeting.status === 'upcoming' 
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-                          : meeting.status === 'in-progress'
-                          ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-                          : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
-                      }`}>
-                        {meeting.status.replace('-', ' ')}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                  <CalendarDaysIcon className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No meetings scheduled for today</p>
-                  <p className="text-sm">Your schedule is clear!</p>
-                </div>
-              )}
-            </div>
+            {renderCalendarSection()}
           </div>
         </div>
 
